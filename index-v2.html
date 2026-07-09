@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JSON Schema 动态表单生成器</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div>
+                    <h1>📋 JSON Schema 动态表单生成器</h1>
+                    <p style="color: #666; margin-top: 8px; font-size: 14px;">支持多语言 i18n、图片上传、拖拽排序、多选框等功能</p>
+                </div>
+                <div style="text-align: right; font-size: 12px; color: #999;">
+                    <div id="schemaInfo"></div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <input type="file" id="schemaUpload" accept=".json" class="file-input">
+                <button id="loadSchemaBtn" class="btn btn-primary">📂 加载JSON文件</button>
+                <select id="schemaSelector" class="schema-selector">
+                    <option value="">选择一个Schema...</option>
+                </select>
+                <div style="margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button id="validateBtn" class="btn btn-primary" style="display:none;">✓ 验证</button>
+                    <button id="resetBtn" class="btn btn-primary" style="display:none;">🔄 重置</button>
+                    <button id="exportBtn" class="btn btn-primary" style="display:none;">💾 导出</button>
+                    <button id="importBtn" class="btn btn-primary" style="display:none;">📥 导入</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div id="formContainer" class="form-container">
+                <div class="empty-state">
+                    <div class="empty-state-icon">📄</div>
+                    <div class="empty-state-text">选择一个Schema开始编辑</div>
+                    <div class="empty-state-hint">上传JSON文件或从下拉菜单中选择</div>
+                </div>
+            </div>
+
+            <div class="preview-panel">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <h3>📊 数据预览</h3>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="copyBtn" class="btn btn-small btn-primary" style="display:none;">📋 复制</button>
+                        <button id="formatBtn" class="btn btn-small btn-primary" style="display:none;">🎯 格式化</button>
+                    </div>
+                </div>
+                <pre id="dataPreview" class="data-preview">{}</pre>
+                <div id="validationErrors" style="display: none; margin-top: 12px; padding: 12px; background-color: #fff5f5; border: 1px solid #feb2b2; border-radius: 4px; color: #c53030; font-size: 12px;"></div>
+                <button id="submitBtn" class="btn btn-success" style="display:none; margin-top: 16px;">✓ 提交表单</button>
+            </div>
+        </div>
+
+        <!-- 隐藏的导入输入 -->
+        <input type="file" id="importInput" accept=".json" style="display: none;">
+    </div>
+
+    <!-- 加载动画 -->
+    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+        <div class="loading-spinner"></div>
+        <p>加载中...</p>
+    </div>
+
+    <!-- 模态对话框 -->
+    <div id="modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">提示</h3>
+                <button id="modalClose" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer">
+                <button id="modalConfirm" class="btn btn-primary">确定</button>
+                <button id="modalCancel" class="btn btn-primary" style="background-color: #999;">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="schema-loader.js"></script>
+    <script src="form-renderer.js"></script>
+    <script src="validator.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

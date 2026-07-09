@@ -1,0 +1,494 @@
+{
+  "onboarding_q1": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Q1 创作场景选项",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "option_text",
+      "option_icon",
+      "industry_tag",
+      "creator_persona",
+      "sub_options",
+      "paid_guide_image",
+      "paid_guide_title",
+      "paid_guide_desc"
+    ],
+    "$defs": {
+      "i18nText": {
+        "type": "object",
+        "required": [
+          "EN"
+        ],
+        "properties": {
+          "EN": {
+            "type": "string"
+          },
+          "ZH": {
+            "type": "string"
+          },
+          "ES": {
+            "type": "string"
+          },
+          "KO": {
+            "type": "string"
+          },
+          "RU": {
+            "type": "string"
+          },
+          "PT": {
+            "type": "string"
+          },
+          "JA": {
+            "type": "string"
+          },
+          "DE": {
+            "type": "string"
+          },
+          "IT": {
+            "type": "string"
+          },
+          "TR": {
+            "type": "string"
+          },
+          "FR": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "i18nImage": {
+        "type": "object",
+        "required": [
+          "EN"
+        ],
+        "properties": {
+          "EN": {
+            "type": "string",
+            "format": "uri"
+          },
+          "ZH": {
+            "type": "string",
+            "format": "uri"
+          },
+          "ES": {
+            "type": "string",
+            "format": "uri"
+          },
+          "KO": {
+            "type": "string",
+            "format": "uri"
+          },
+          "RU": {
+            "type": "string",
+            "format": "uri"
+          },
+          "PT": {
+            "type": "string",
+            "format": "uri"
+          },
+          "JA": {
+            "type": "string",
+            "format": "uri"
+          },
+          "DE": {
+            "type": "string",
+            "format": "uri"
+          },
+          "IT": {
+            "type": "string",
+            "format": "uri"
+          },
+          "TR": {
+            "type": "string",
+            "format": "uri"
+          },
+          "FR": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      },
+      "contentTag": {
+        "type": "string",
+        "enum": [
+          "character",
+          "props",
+          "creatures & animals",
+          "vehicle",
+          "weapon",
+          "machine",
+          "architecture",
+          "environment",
+          "abstract / symbol",
+          "clothing",
+          "furniture",
+          "food",
+          "product",
+          "accessory",
+          "others"
+        ]
+      }
+    },
+    "properties": {
+      "option_text": {
+        "$ref": "#/$defs/i18nText",
+        "description": "选项文案",
+        "x-widget": "i18n-upload"
+      },
+      "option_icon": {
+        "type": "string",
+        "format": "uri",
+        "description": "选项图标（所有语言共用）",
+        "x-widget": "image-upload"
+      },
+      "industry_tag": {
+        "type": "string",
+        "description": "行业标签（单选）",
+        "x-widget": "select",
+        "enum": [
+          "gaming",
+          "vr_xr_ar",
+          "animation",
+          "industrial",
+          "interior_architecture",
+          "3d_printing",
+          "fashion",
+          "product",
+          "other"
+        ]
+      },
+      "creator_persona": {
+        "type": "string",
+        "description": "Persona 标签（单选）",
+        "x-widget": "select",
+        "enum": [
+          "explorers",
+          "makers",
+          "designers",
+          "3d_artists"
+        ]
+      },
+      "sub_options": {
+        "type": "array",
+        "minItems": 4,
+        "maxItems": 4,
+        "description": "子选项，固定 4 个位置，数组顺序即展示顺序（拖拽排序）",
+        "x-widget": "drag-sort-list",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "icon",
+            "example_model_urls",
+            "content_tags"
+          ],
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/i18nText",
+              "description": "子选项文案",
+              "x-widget": "i18n-upload"
+            },
+            "icon": {
+              "type": "string",
+              "format": "uri",
+              "description": "子选项图标（所有语言共用）",
+              "x-widget": "image-upload"
+            },
+            "example_model_urls": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "description": "示例模型链接（固定 4 个）"
+            },
+            "content_tags": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/contentTag"
+              },
+              "description": "内容标签（多选）",
+              "x-widget": "multi-select"
+            }
+          }
+        }
+      },
+      "paid_guide_image": {
+        "$ref": "#/$defs/i18nImage",
+        "description": "付费引导图片（按语言配置）",
+        "x-widget": "i18n-upload"
+      },
+      "paid_guide_title": {
+        "$ref": "#/$defs/i18nText",
+        "description": "付费引导标题",
+        "x-widget": "i18n-upload"
+      },
+      "paid_guide_desc": {
+        "$ref": "#/$defs/i18nText",
+        "description": "付费引导描述",
+        "x-widget": "i18n-upload"
+      }
+    }
+  },
+  "onboarding_q2": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Q2 情况描述选项",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "option_text",
+      "creator_level",
+      "conversion_potential",
+      "plan_recommend_t1_t2",
+      "plan_recommend_t3"
+    ],
+    "$defs": {
+      "i18nText": {
+        "type": "object",
+        "required": [
+          "EN"
+        ],
+        "properties": {
+          "EN": {
+            "type": "string"
+          },
+          "ZH": {
+            "type": "string"
+          },
+          "ES": {
+            "type": "string"
+          },
+          "KO": {
+            "type": "string"
+          },
+          "RU": {
+            "type": "string"
+          },
+          "PT": {
+            "type": "string"
+          },
+          "JA": {
+            "type": "string"
+          },
+          "DE": {
+            "type": "string"
+          },
+          "IT": {
+            "type": "string"
+          },
+          "TR": {
+            "type": "string"
+          },
+          "FR": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "properties": {
+      "option_text": {
+        "$ref": "#/$defs/i18nText",
+        "description": "选项文案",
+        "x-widget": "i18n-upload"
+      },
+      "creator_level": {
+        "type": "string",
+        "description": "熟练度标签（单选）",
+        "x-widget": "select",
+        "enum": [
+          "beginner",
+          "intermediate",
+          "professional"
+        ]
+      },
+      "conversion_potential": {
+        "type": "string",
+        "description": "潜在付费能力标签（单选）",
+        "x-widget": "select",
+        "enum": [
+          "low_intent",
+          "medium_intent",
+          "high_intent"
+        ]
+      },
+      "plan_recommend_t1_t2": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "enum": [
+            "pro",
+            "max",
+            "team"
+          ]
+        },
+        "description": "T1/T2 地区付费方案推荐（多选）",
+        "x-widget": "multi-select"
+      },
+      "plan_recommend_t3": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "enum": [
+            "starter",
+            "pro",
+            "team"
+          ]
+        },
+        "description": "T3 地区付费方案推荐（多选）",
+        "x-widget": "multi-select"
+      }
+    }
+  },
+  "plan_detail": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "付费方案详情",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "plan_tier",
+      "plan_title",
+      "annual_benefits",
+      "monthly_benefits",
+      "annual_product_id",
+      "monthly_product_id"
+    ],
+    "$defs": {
+      "i18nText": {
+        "type": "object",
+        "required": [
+          "EN"
+        ],
+        "properties": {
+          "EN": {
+            "type": "string"
+          },
+          "ZH": {
+            "type": "string"
+          },
+          "ES": {
+            "type": "string"
+          },
+          "KO": {
+            "type": "string"
+          },
+          "RU": {
+            "type": "string"
+          },
+          "PT": {
+            "type": "string"
+          },
+          "JA": {
+            "type": "string"
+          },
+          "DE": {
+            "type": "string"
+          },
+          "IT": {
+            "type": "string"
+          },
+          "TR": {
+            "type": "string"
+          },
+          "FR": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "i18nRichText": {
+        "type": "object",
+        "required": [
+          "EN"
+        ],
+        "properties": {
+          "EN": {
+            "type": "string"
+          },
+          "ZH": {
+            "type": "string"
+          },
+          "ES": {
+            "type": "string"
+          },
+          "KO": {
+            "type": "string"
+          },
+          "RU": {
+            "type": "string"
+          },
+          "PT": {
+            "type": "string"
+          },
+          "JA": {
+            "type": "string"
+          },
+          "DE": {
+            "type": "string"
+          },
+          "IT": {
+            "type": "string"
+          },
+          "TR": {
+            "type": "string"
+          },
+          "FR": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "properties": {
+      "plan_tier": {
+        "type": "string",
+        "description": "会员等级（单选）",
+        "x-widget": "select",
+        "enum": [
+          "starter",
+          "pro",
+          "max",
+          "team"
+        ]
+      },
+      "plan_title": {
+        "$ref": "#/$defs/i18nText",
+        "description": "会员标题",
+        "x-widget": "i18n-upload"
+      },
+      "annual_benefits": {
+        "$ref": "#/$defs/i18nRichText",
+        "description": "年费会员权益（富文本）",
+        "x-widget": "i18n-richtext"
+      },
+      "monthly_benefits": {
+        "$ref": "#/$defs/i18nRichText",
+        "description": "月费会员权益（富文本）",
+        "x-widget": "i18n-richtext"
+      },
+      "annual_product_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "年费商品 ID",
+        "x-widget": "text"
+      },
+      "monthly_product_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "月费商品 ID",
+        "x-widget": "text"
+      }
+    }
+  }
+}
