@@ -1,10 +1,15 @@
 let schemaLoader = null;
 let formRenderer = null;
 let currentFormData = {};
+let apiClient = null;
+// 从中台加载的 schema 名 -> {dataId, key}，用于提交时定位 config entry
+let remoteSchemaMeta = {};
 
 document.addEventListener('DOMContentLoaded', () => {
     schemaLoader = new SchemaLoader();
+    apiClient = new McApiClient();
     initializeEventListeners();
+    initializeApiControls();
     loadDemoSchema();
     setupKeyboardShortcuts();
 });
@@ -29,6 +34,7 @@ function initializeEventListeners() {
             try {
                 showLoading(true);
                 await schemaLoader.loadFromFile(file);
+                remoteSchemaMeta = {};
                 showAlert('✓ JSON文件加载成功', 'success');
                 schemaSelector.focus();
             } catch (error) {
@@ -47,9 +53,7 @@ function initializeEventListeners() {
     });
 
     submitBtn.addEventListener('click', () => {
-        const formData = formRenderer.getFormData();
-        console.log('Form Data:', formData);
-        showAlert('✓ 表单已提交，请查看控制台', 'success');
+        submitToCenter();
     });
 
     resetBtn.addEventListener('click', () => {
@@ -97,6 +101,251 @@ async function loadDemoSchema() {
         console.warn('Demo JSON加载失败，请手动上传', error);
     }
 }
+
+// ==================== 中台 OpenAPI 对接 ====================
+
+function initializeApiControls() {
+    const apiBaseInput = document.getElementById('apiBaseInput');
+    const loadRemoteBtn = document.getElementById('loadRemoteBtn');
+    const loginBtn = document.getElementById('loginBtn');
+
+    if (!apiBaseInput || !loadRemoteBtn || !loginBtn) {
+        return;
+    }
+
+    apiBaseInput.value = apiClient.baseURL;
+    apiBaseInput.addEventListener('change', () => {
+        apiClient.setBaseURL(apiBaseInput.value);
+        apiBaseInput.value = apiClient.baseURL;
+    });
+
+    loadRemoteBtn.addEventListener('click', () => {
+        apiClient.setBaseURL(apiBaseInput.value);
+        loadRemoteSchemas();
+    });
+
+    loginBtn.addEventListener('click', async () => {
+        if (apiClient.isLoggedIn()) {
+            apiClient.logout();
+            updateAuthStatus();
+            showAlert('✓ 已退出登录', 'info');
+        } else {
+            apiClient.setBaseURL(apiBaseInput.value);
+            await showLoginModal();
+        }
+    });
+
+    updateAuthStatus();
+}
+
+function updateAuthStatus() {
+    const loginBtn = document.getElementById('loginBtn');
+    const authStatus = document.getElementById('authStatus');
+    if (!loginBtn || !authStatus) {
+        return;
+    }
+    if (apiClient.isLoggedIn()) {
+        loginBtn.textContent = '🚪 登出';
+        authStatus.textContent = '已登录';
+        authStatus.style.color = '#38a169';
+    } else {
+        loginBtn.textContent = '🔑 登录';
+        authStatus.textContent = '未登录（提交需登录）';
+        authStatus.style.color = '#999';
+    }
+}
+
+async function loadRemoteSchemas() {
+    try {
+        showLoading(true);
+        const schemas = await apiClient.getAllSchemas();
+        const names = Object.keys(schemas || {});
+        if (names.length === 0) {
+            showAlert('中台暂无可用 Schema', 'info');
+            return;
+        }
+
+        const schemaMap = {};
+        remoteSchemaMeta = {};
+        names.forEach(name => {
+            const cfg = schemas[name];
+            const fields = cfg.fields || {};
+            if (!fields.title) {
+                fields.title = cfg.title || name;
+            }
+            schemaMap[name] = fields;
+            remoteSchemaMeta[name] = { dataId: cfg.data_id, key: cfg.key };
+        });
+
+        schemaLoader.schemas = schemaMap;
+        schemaLoader.updateSchemaSelector();
+        showAlert(`✓ 已从中台加载 ${names.length} 个 Schema，请选择`, 'success');
+    } catch (error) {
+        showAlert(`✗ 加载中台 Schema 失败: ${error.message}`, 'error');
+    } finally {
+        showLoading(false);
+    }
+}
+
+// 通用输入弹窗：fields = [{name, label, type, value, placeholder}]
+// 确认返回 {name: value}，取消返回 null
+function showFormModal(title, fields, confirmText) {
+    return new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+
+        const inputsHtml = fields.map(f => `
+            <div style="margin-bottom: 12px;">
+                <label style="display: block; margin-bottom: 4px; font-size: 13px; color: #444;">${f.label}</label>
+                <input type="${f.type || 'text'}" data-field="${f.name}"
+                       value="${f.value || ''}" placeholder="${f.placeholder || ''}"
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
+            </div>`).join('');
+
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>${title}</h3>
+                    <button class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    ${inputsHtml}
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" data-role="confirm">${confirmText || '确定'}</button>
+                    <button class="btn btn-primary" data-role="cancel" style="background-color: #999;">取消</button>
+                </div>
+            </div>`;
+
+        document.body.appendChild(modal);
+        const firstInput = modal.querySelector('input');
+        if (firstInput) {
+            firstInput.focus();
+        }
+
+        const close = (result) => {
+            modal.remove();
+            resolve(result);
+        };
+        const collect = () => {
+            const result = {};
+            modal.querySelectorAll('input[data-field]').forEach(input => {
+                result[input.dataset.field] = input.value.trim();
+            });
+            return result;
+        };
+
+        modal.querySelector('[data-role="confirm"]').addEventListener('click', () => close(collect()));
+        modal.querySelector('[data-role="cancel"]').addEventListener('click', () => close(null));
+        modal.querySelector('.modal-close').addEventListener('click', () => close(null));
+        modal.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                close(collect());
+            } else if (e.key === 'Escape') {
+                close(null);
+            }
+        });
+    });
+}
+
+// 弹出登录框并执行登录，成功返回 true
+async function showLoginModal() {
+    const values = await showFormModal('登录中台', [
+        { name: 'email', label: '邮箱', type: 'email', placeholder: 'user@example.com' },
+        { name: 'password', label: '密码', type: 'password' },
+    ], '登录');
+
+    if (!values) {
+        return false;
+    }
+    if (!values.email || !values.password) {
+        showAlert('✗ 请输入邮箱和密码', 'error');
+        return false;
+    }
+
+    try {
+        showLoading(true);
+        const data = await apiClient.login(values.email, values.password);
+        updateAuthStatus();
+        showAlert('✓ 登录成功', 'success');
+        if (data.must_change_password) {
+            showAlert('⚠ 当前为初始密码，请尽快到中台修改', 'info');
+        }
+        return true;
+    } catch (error) {
+        showAlert(`✗ 登录失败: ${error.message}`, 'error');
+        return false;
+    } finally {
+        showLoading(false);
+    }
+}
+
+// 提交表单数据到中台 config entry
+async function submitToCenter() {
+    if (!formRenderer) {
+        return;
+    }
+
+    const formData = formRenderer.getFormData();
+    const schemaName = schemaLoader.getCurrentSchemaName();
+
+    // 确定 data_id / key：中台加载的 schema 自带；本地文件加载的需要手动指定
+    let meta = remoteSchemaMeta[schemaName];
+    if (!meta) {
+        const values = await showFormModal('指定配置位置（本地 Schema 需手动填写）', [
+            { name: 'dataId', label: 'data_id（配置文件名）', value: schemaName || '' },
+            { name: 'key', label: 'key（配置 Key）', placeholder: 'default' },
+        ], '继续提交');
+        if (!values) {
+            return;
+        }
+        if (!values.dataId || !values.key) {
+            showAlert('✗ data_id 和 key 不能为空', 'error');
+            return;
+        }
+        meta = { dataId: values.dataId, key: values.key };
+    }
+
+    if (!apiClient.isLoggedIn()) {
+        const ok = await showLoginModal();
+        if (!ok) {
+            return;
+        }
+    }
+
+    try {
+        showLoading(true);
+        const { entry, created } = await apiClient.saveEntry(meta.dataId, meta.key, formData);
+        showLoading(false);
+        showAlert(`✓ ${created ? '创建' : '更新'}成功: ${meta.dataId}/${meta.key}（状态: ${entry.status}）`, 'success');
+
+        if (confirm('草稿已保存到中台，是否立即发布？')) {
+            showLoading(true);
+            const published = await apiClient.publishEntry(meta.dataId, meta.key);
+            showLoading(false);
+            showAlert(`✓ 已发布: ${meta.dataId}/${meta.key}（版本: ${published.published_version}）`, 'success');
+        }
+    } catch (error) {
+        showLoading(false);
+        if (error.authRequired) {
+            updateAuthStatus();
+            const ok = await showLoginModal();
+            if (ok) {
+                return submitToCenter();
+            }
+            return;
+        }
+        if (error.status === 422) {
+            showAlert('✗ 提交失败: 表单数据不符合中台 Schema 校验，请检查必填项', 'error');
+        } else if (error.status === 404) {
+            showAlert(`✗ 提交失败: 中台不存在该 Schema (${meta.dataId}/${meta.key})`, 'error');
+        } else {
+            showAlert(`✗ 提交失败: ${error.message}`, 'error');
+        }
+    }
+}
+
+// ==================== 中台 OpenAPI 对接结束 ====================
 
 function loadSchema(schemaName) {
     const schema = schemaLoader.getSchema(schemaName);

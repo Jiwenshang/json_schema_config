@@ -26,14 +26,18 @@ class FormRenderer {
             this.container.appendChild(desc);
         }
 
-        const propertiesKeys = Object.keys(this.schema.properties || {});
-        const required = this.schema.required || [];
-
-        propertiesKeys.forEach(key => {
-            const property = this.schema.properties[key];
-            const isRequired = required.includes(key);
-            this.renderProperty(key, property, isRequired);
-        });
+        // 胖 schema：若声明了 x-sections，按分区布局渲染
+        if (Array.isArray(this.schema['x-sections'])) {
+            this.renderSections(this.schema['x-sections']);
+        } else {
+            const propertiesKeys = Object.keys(this.schema.properties || {});
+            const required = this.schema.required || [];
+            propertiesKeys.forEach(key => {
+                const property = this.schema.properties[key];
+                const isRequired = required.includes(key);
+                this.renderProperty(key, property, isRequired);
+            });
+        }
 
         this.updateDataPreview();
     }
@@ -116,7 +120,7 @@ class FormRenderer {
         label.htmlFor = key;
 
         const labelText = document.createElement('span');
-        labelText.textContent = property.description || key;
+        labelText.textContent = property.title || property.description || key;
         label.appendChild(labelText);
 
         if (isRequired) {
@@ -130,6 +134,15 @@ class FormRenderer {
         return group;
     }
 
+    // 用户可见的帮助文案（schema description，非内部注释 $comment），显示在控件下方
+    hintFor(property) {
+        if (!property.title || !property.description) return null;
+        const p = document.createElement('p');
+        p.className = 'field-hint';
+        p.textContent = property.description;
+        return p;
+    }
+
     createBasicInput(key, property) {
         let input;
 
@@ -137,13 +150,17 @@ class FormRenderer {
             if (property.format === 'uri') {
                 input = document.createElement('input');
                 input.type = 'url';
+            } else if (property.format === 'date-time') {
+                input = document.createElement('input');
+                input.type = 'datetime-local';
+                input.step = 1;
             } else if (property.minLength && property.minLength > 50) {
                 input = document.createElement('textarea');
             } else {
                 input = document.createElement('input');
                 input.type = 'text';
             }
-        } else if (property.type === 'number') {
+        } else if (property.type === 'number' || property.type === 'integer') {
             input = document.createElement('input');
             input.type = 'number';
         } else if (property.type === 'boolean') {
@@ -162,7 +179,7 @@ class FormRenderer {
         input.addEventListener('input', () => {
             if (property.type === 'boolean') {
                 this.formData[key] = input.checked;
-            } else if (property.type === 'number') {
+            } else if (property.type === 'number' || property.type === 'integer') {
                 this.formData[key] = parseFloat(input.value);
             } else {
                 this.formData[key] = input.value;
@@ -226,6 +243,7 @@ class FormRenderer {
         checkboxGroup.style.marginTop = '8px';
 
         const items = property.items?.enum || property.enum || [];
+        const enumLabels = property['x-enum-labels'] || {};
 
         items.forEach(value => {
             const checkbox = document.createElement('input');
@@ -235,7 +253,7 @@ class FormRenderer {
 
             const label = document.createElement('label');
             label.htmlFor = `${key}-${value}`;
-            label.textContent = value;
+            label.textContent = enumLabels[value] || value;
             label.style.cursor = 'pointer';
 
             const wrapper = document.createElement('div');
@@ -383,7 +401,9 @@ class FormRenderer {
         const input = document.createElement('input');
         input.type = 'file';
         input.className = 'image-upload-input';
-        input.accept = 'image/*';
+        input.accept = Array.isArray(property['x-accept']) && property['x-accept'].length
+            ? property['x-accept'].join(',')
+            : 'image/*';
         input.id = `${key}-input`;
 
         const label = document.createElement('label');
@@ -395,6 +415,7 @@ class FormRenderer {
         preview.className = 'image-preview';
         preview.style.display = 'none';
 
+        uploadContainer.appendChild(input);
         uploadContainer.appendChild(label);
         uploadContainer.appendChild(preview);
 
@@ -434,6 +455,8 @@ class FormRenderer {
         });
 
         group.appendChild(uploadContainer);
+        const hint = this.hintFor(property);
+        if (hint) group.appendChild(hint);
         this.container.appendChild(group);
         this.fieldElements[key] = input;
         this.formData[key] = '';
@@ -525,7 +548,7 @@ class FormRenderer {
             const fieldLabel = document.createElement('label');
             fieldLabel.className = 'form-label';
             fieldLabel.style.marginBottom = '4px';
-            fieldLabel.textContent = propSchema.description || propKey;
+            fieldLabel.textContent = propSchema.title || propSchema.description || propKey;
             fieldGroup.appendChild(fieldLabel);
 
             let fieldInput;
@@ -770,10 +793,1040 @@ class FormRenderer {
         }
     }
 
+    refreshDynSectionTitles() {
+        (this._dynSectionTitles || []).forEach(({ el, template }) => {
+            const text = template.replace(/\{(\w+)\}/g, (_, k) => {
+                const v = this.formData[k];
+                return typeof v === 'string' && v
+                    ? v.charAt(0).toUpperCase() + v.slice(1)
+                    : '';
+            }).trim();
+            el.textContent = text;
+        });
+    }
+
     updateDataPreview() {
+        this.refreshDynSectionTitles();
+        this.refreshCondFields();
         if (this.onDataChange) {
             this.onDataChange(this.formData);
         }
+    }
+
+    // ===== 胖 schema：分区渲染 =====
+
+    renderSections(sections) {
+        this._dynSectionTitles = [];
+        this._condFields = [];
+        sections.forEach(section => {
+            const wrap = document.createElement('div');
+            wrap.className = 'form-section fat-section';
+
+            const h = document.createElement('h2');
+            h.className = 'section-title';
+            const titleTpl = section.title || section.key;
+            h.textContent = titleTpl;
+            // 分区标题占位符：如 "{plan_tier} 多语言配置"，随字段当前值动态替换（首字母大写）
+            if (/\{\w+\}/.test(titleTpl)) {
+                this._dynSectionTitles.push({ el: h, template: titleTpl });
+                this.refreshDynSectionTitles();
+            }
+            wrap.appendChild(h);
+
+            if (section.subtitle) {
+                const sub = document.createElement('p');
+                sub.className = 'section-subtitle';
+                sub.textContent = section.subtitle;
+                wrap.appendChild(sub);
+            }
+
+            const body = document.createElement('div');
+            body.className = 'section-body';
+
+            if (Array.isArray(section.rows)) {
+                section.rows.forEach(row => {
+                    const rowEl = document.createElement('div');
+                    rowEl.className = 'field-row';
+                    rowEl.style.gridTemplateColumns = `repeat(${row.length}, 1fr)`;
+                    row.forEach(fieldKey => this.renderFieldInto(rowEl, fieldKey, true));
+                    body.appendChild(rowEl);
+                });
+            }
+            if (Array.isArray(section.bundle)) {
+                this.renderBundleCsv(body, section);
+            }
+            if (section.field) {
+                this.renderFieldInto(body, section.field);
+            }
+
+            wrap.appendChild(body);
+            this.container.appendChild(wrap);
+        });
+        this.refreshCondFields();
+    }
+
+    refreshCondFields() {
+        (this._condFields || []).forEach(({ el, cond }) => {
+            el.style.display = this.formData[cond.field] === cond.equals ? '' : 'none';
+        });
+    }
+
+    renderFieldInto(parent, key, showCardLabel) {
+        const property = (this.schema.properties || {})[key];
+        if (!property) return;
+        const required = (this.schema.required || []).includes(key);
+        const widget = property['x-widget'] || this.getDefaultWidget(property);
+
+        // x-visible-when：条件渲染（如 具体天数 仅在 资产时效=days 时显示），
+        // 与 schema 的 allOf 条件校验对应；数据层不受影响
+        if (property['x-visible-when']) {
+            const wrap = document.createElement('div');
+            parent.appendChild(wrap);
+            this._condFields.push({ el: wrap, cond: property['x-visible-when'] });
+            parent = wrap;
+        }
+
+        switch (widget) {
+            case 'hidden':
+                break; // 系统维护字段（如 sort），表单不渲染
+            case 'i18n-csv':
+                this.renderI18nCsv(parent, key, property, required, showCardLabel);
+                break;
+            case 'image-config':
+                this.renderImageConfig(parent, key, property, required);
+                break;
+            case 'plan-card-list':
+                this.renderPlanCards(parent, key, property, required);
+                break;
+            case 'sub-option-table':
+                this.renderSubOptionTable(parent, key, property, required);
+                break;
+            case 'date-range':
+                this.renderDateRange(parent, key, property, required);
+                break;
+            case 'select':
+                parent.appendChild(this.buildSelectGroup(key, property, required,
+                    v => {
+                        // boolean 字段用 select 表达（如 是否展示在图鉴 是/否）时还原类型
+                        this.formData[key] = property.type === 'boolean' ? v === 'true' : v;
+                        this.updateDataPreview();
+                    }));
+                break;
+            case 'input':
+            case 'text':
+                parent.appendChild(this.buildInputGroup(key, property, required,
+                    v => { this.formData[key] = v; this.updateDataPreview(); }));
+                break;
+            default: {
+                // 其余控件（image-upload / i18n-upload / multi-select / drag-sort-list / checkbox 等）
+                // 复用原有渲染路径：临时把输出容器切到当前分区
+                const prev = this.container;
+                this.container = parent;
+                this.renderProperty(key, property, required);
+                this.container = prev;
+            }
+        }
+    }
+
+    // 通用：带标签的表单组
+    labelFor(property, key, required) {
+        const label = document.createElement('label');
+        label.className = 'form-label';
+        const span = document.createElement('span');
+        span.textContent = property.title || key;
+        label.appendChild(span);
+        if (required) {
+            const r = document.createElement('span');
+            r.className = 'required';
+            r.textContent = ' *';
+            label.appendChild(r);
+        }
+        return label;
+    }
+
+    buildInputGroup(key, property, required, onChange, initialValue) {
+        const group = document.createElement('div');
+        group.className = 'form-group';
+        group.appendChild(this.labelFor(property, key, required));
+
+        const multiline = property['x-widget'] === 'textarea' || property['x-multiline'];
+        const input = document.createElement(multiline ? 'textarea' : 'input');
+        input.className = 'form-control';
+        if (!multiline) {
+            if (property.type === 'number' || property.type === 'integer') {
+                input.type = 'number';
+            } else if (property.format === 'date-time') {
+                input.type = 'datetime-local';
+                input.step = 1;
+            } else {
+                input.type = property.format === 'uri' ? 'url' : 'text';
+            }
+        }
+        if (initialValue != null) input.value = initialValue;
+        if (property['x-readonly']) {
+            input.disabled = true;
+            input.placeholder = '（只读，取自 CSV）';
+        }
+        input.addEventListener('input', () => {
+            const numeric = property.type === 'number' || property.type === 'integer';
+            onChange(numeric && input.value !== '' ? parseFloat(input.value) : input.value);
+        });
+        group.appendChild(input);
+        const inputHint = this.hintFor(property);
+        if (inputHint) group.appendChild(inputHint);
+        this.fieldElements[key] = input;
+        return group;
+    }
+
+    buildSelectGroup(key, property, required, onChange, initialValue) {
+        const group = document.createElement('div');
+        group.className = 'form-group';
+        group.appendChild(this.labelFor(property, key, required));
+
+        const select = document.createElement('select');
+        select.className = 'form-control';
+        const ph = document.createElement('option');
+        ph.value = '';
+        ph.textContent = '请选择...';
+        select.appendChild(ph);
+
+        const labels = property['x-enum-labels'] || {};
+        const options = Array.isArray(property['x-options'])
+            ? property['x-options']
+            : (property.enum || []).map(v => ({ value: v, label: labels[v] || v }));
+
+        options.forEach(opt => {
+            const o = document.createElement('option');
+            o.value = opt.value;
+            o.textContent = opt.label;
+            select.appendChild(o);
+        });
+        if (initialValue != null) select.value = initialValue;
+        if (property['x-readonly']) select.disabled = true;
+        select.addEventListener('change', () => onChange(select.value));
+        group.appendChild(select);
+        const selectHint = this.hintFor(property);
+        if (selectHint) group.appendChild(selectHint);
+        this.fieldElements[key] = select;
+        return group;
+    }
+
+    // ===== image-config 控件（按语言的 webp 头图 + 图片描述）=====
+
+    renderImageConfig(parent, key, property, required) {
+        const props = property.properties || {};
+        const localized = props.localized || {};
+        const langs = localized['x-i18n-langs'] || ['EN'];
+        this.formData[key] = this.formData[key] || {};
+        if (!this.formData[key].localized) this.formData[key].localized = {};
+        if (!this.formData[key].asset_type) {
+            this.formData[key].asset_type = (props.asset_type && props.asset_type.default) || 'webp';
+        }
+
+        const box = document.createElement('div');
+        box.className = 'image-config card';
+        const body = document.createElement('div');
+        body.className = 'card-body';
+
+        // 素材类型（固定 webp）
+        body.appendChild(this.buildSelectGroup(`${key}.asset_type`, props.asset_type, false,
+            v => { this.formData[key].asset_type = v; this.updateDataPreview(); },
+            this.formData[key].asset_type));
+
+        // 按语言：图片描述 + 自动上传（webp）
+        const container = document.createElement('div');
+        container.className = 'i18n-container';
+        const tabs = document.createElement('div');
+        tabs.className = 'i18n-tabs';
+        const contents = document.createElement('div');
+        contents.className = 'i18n-contents';
+
+        langs.forEach((lang, index) => {
+            this.formData[key].localized[lang] = this.formData[key].localized[lang] || {};
+
+            const tab = document.createElement('button');
+            tab.type = 'button';
+            tab.className = 'i18n-tab' + (index === 0 ? ' active' : '');
+            tab.textContent = lang;
+
+            const content = document.createElement('div');
+            content.className = 'i18n-content';
+            content.style.display = index === 0 ? 'block' : 'none';
+
+            // 图片描述
+            const altGroup = document.createElement('div');
+            altGroup.className = 'form-group';
+            const altLabel = document.createElement('label');
+            altLabel.className = 'form-label';
+            altLabel.textContent = '图片描述';
+            const altInput = document.createElement('input');
+            altInput.type = 'text';
+            altInput.className = 'form-control';
+            altInput.placeholder = `如 3D export privilege preview（${lang}）`;
+            altInput.addEventListener('input', () => {
+                this.formData[key].localized[lang].image_alt = altInput.value;
+                this.updateDataPreview();
+            });
+            altGroup.appendChild(altLabel);
+            altGroup.appendChild(altInput);
+
+            // 自动上传（仅 webp）
+            const upGroup = document.createElement('div');
+            upGroup.className = 'form-group';
+            const upLabel = document.createElement('label');
+            upLabel.className = 'form-label';
+            upLabel.textContent = '自动上传（仅 webp）';
+            const upInput = document.createElement('input');
+            upInput.type = 'file';
+            upInput.accept = 'image/webp';
+            upInput.className = 'form-control';
+            const preview = document.createElement('img');
+            preview.className = 'image-preview';
+            preview.style.display = 'none';
+            upInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                if (file.type !== 'image/webp') {
+                    alert('仅支持 webp 图片');
+                    upInput.value = '';
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    this.formData[key].localized[lang].image = ev.target.result;
+                    preview.src = ev.target.result;
+                    preview.style.display = 'block';
+                    this.updateDataPreview();
+                };
+                reader.readAsDataURL(file);
+            });
+            upGroup.appendChild(upLabel);
+            upGroup.appendChild(upInput);
+            upGroup.appendChild(preview);
+
+            content.appendChild(altGroup);
+            content.appendChild(upGroup);
+            contents.appendChild(content);
+
+            tab.addEventListener('click', (e) => {
+                e.preventDefault();
+                tabs.querySelectorAll('.i18n-tab').forEach(t => t.classList.remove('active'));
+                contents.querySelectorAll('.i18n-content').forEach(c => c.style.display = 'none');
+                tab.classList.add('active');
+                content.style.display = 'block';
+            });
+            tabs.appendChild(tab);
+        });
+
+        container.appendChild(tabs);
+        container.appendChild(contents);
+        body.appendChild(container);
+        box.appendChild(body);
+        parent.appendChild(box);
+    }
+
+    // ===== bundle CSV 控件（多个扁平 i18n 字段 {语言: 文本} 共用一个 CSV，数据仍写回各自属性）=====
+
+    renderBundleCsv(parent, section) {
+        const keys = section.bundle;
+        const props = this.schema.properties || {};
+        const langs = ['EN', 'ZH', 'ES', 'KO', 'RU', 'PT', 'JA', 'DE', 'IT', 'TR', 'FR'];
+        keys.forEach(k => {
+            if (!this.formData[k] || typeof this.formData[k] !== 'object') this.formData[k] = {};
+        });
+
+        const box = document.createElement('div');
+        box.className = 'i18n-csv card';
+        const body = document.createElement('div');
+        body.className = 'card-body';
+
+        const countEl = document.createElement('h3');
+        countEl.className = 'i18n-csv-count';
+        body.appendChild(countEl);
+
+        const hint = document.createElement('p');
+        hint.className = 'section-subtitle';
+        const labels = keys.map(k => (props[k] && props[k].title) || k);
+        hint.textContent = `统一配置 ${labels.join('、')}；EN 必填，其他语言未配置时 fallback 到 EN。`;
+        body.appendChild(hint);
+
+        const btns = document.createElement('div');
+        btns.className = 'toolbar';
+        const tplBtn = document.createElement('button');
+        tplBtn.type = 'button';
+        tplBtn.className = 'btn btn-small';
+        tplBtn.style.border = '1px solid var(--border-color)';
+        tplBtn.textContent = '下载 CSV 模板';
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'btn btn-small';
+        dlBtn.style.border = '1px solid var(--border-color)';
+        dlBtn.textContent = '下载已上传 CSV';
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.className = 'btn btn-small btn-primary';
+        upBtn.textContent = '替换 CSV';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.csv';
+        fileInput.style.display = 'none';
+        btns.appendChild(tplBtn);
+        btns.appendChild(dlBtn);
+        btns.appendChild(upBtn);
+        btns.appendChild(fileInput);
+        body.appendChild(btns);
+
+        const fileInfo = document.createElement('div');
+        fileInfo.className = 'i18n-csv-fileinfo';
+        body.appendChild(fileInfo);
+
+        const updateCount = () => {
+            const filled = langs.filter(l =>
+                keys.some(k => this.formData[k] && this.formData[k][l])).length;
+            countEl.textContent = `已配置 ${filled}/${langs.length}`;
+        };
+
+        tplBtn.addEventListener('click', () => {
+            const header = ['lang', ...keys];
+            const example = ['EN', ...keys.map(() => '')];
+            this.downloadCsv(`${section.key || 'i18n'}-template.csv`, [header, example]);
+        });
+        dlBtn.addEventListener('click', () => {
+            const header = ['lang', ...keys];
+            const rows = langs
+                .filter(l => keys.some(k => this.formData[k][l]))
+                .map(l => [l, ...keys.map(k => this.formData[k][l] || '')]);
+            this.downloadCsv(`${section.key || 'i18n'}-uploaded.csv`, [header, ...rows]);
+        });
+        upBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const parsed = this.parseCsv(ev.target.result);
+                const head = parsed[0] || [];
+                keys.forEach(k => { this.formData[k] = {}; });
+                for (let i = 1; i < parsed.length; i++) {
+                    const row = parsed[i];
+                    const lang = row[0];
+                    if (!lang) continue;
+                    head.forEach((h, idx) => {
+                        if (idx === 0 || !keys.includes(h)) return;
+                        if (row[idx] != null && row[idx] !== '') this.formData[h][lang] = row[idx];
+                    });
+                }
+                updateCount();
+                fileInfo.innerHTML = `<div><strong>当前文件：</strong>${file.name}</div>`;
+                this.updateDataPreview();
+            };
+            reader.readAsText(file);
+        });
+
+        updateCount();
+        box.appendChild(body);
+        parent.appendChild(box);
+    }
+
+    // ===== i18n-csv 控件 =====
+
+    renderI18nCsv(parent, key, property, required, showCardLabel) {
+        const cfg = property['x-i18n'] || {};
+        const langs = cfg.languages || ['EN'];
+        this.formData[key] = this.formData[key] || {};
+
+        // 作为分区内普通字段（rows 布局）渲染时带字段标签；作为整段（section.field）渲染时分区标题已足够
+        if (showCardLabel && property.title) {
+            const group = document.createElement('div');
+            group.className = 'form-group';
+            group.appendChild(this.labelFor(property, key, required));
+            parent.appendChild(group);
+            parent = group;
+        }
+
+        const box = document.createElement('div');
+        box.className = 'i18n-csv card';
+
+        const body = document.createElement('div');
+        body.className = 'card-body';
+
+        const countEl = document.createElement('h3');
+        countEl.className = 'i18n-csv-count';
+        body.appendChild(countEl);
+
+        const hint = document.createElement('p');
+        hint.className = 'section-subtitle';
+        hint.textContent = cfg.hint
+            || `统一配置 ${(cfg.fields || []).map(f => f.label).slice(0, 6).join('、')} 等；${cfg.requiredLanguage || 'EN'} 必填，其他语言未配置时 fallback 到 ${cfg.requiredLanguage || 'EN'}。`;
+        body.appendChild(hint);
+
+        const btns = document.createElement('div');
+        btns.className = 'toolbar';
+
+        const tplBtn = document.createElement('button');
+        tplBtn.type = 'button';
+        tplBtn.className = 'btn btn-small';
+        tplBtn.style.border = '1px solid var(--border-color)';
+        tplBtn.textContent = '下载 CSV 模板';
+
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'btn btn-small';
+        dlBtn.style.border = '1px solid var(--border-color)';
+        dlBtn.textContent = '下载已上传 CSV';
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.className = 'btn btn-small btn-primary';
+        upBtn.textContent = '替换 CSV';
+
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.csv';
+        fileInput.style.display = 'none';
+
+        btns.appendChild(tplBtn);
+        btns.appendChild(dlBtn);
+        btns.appendChild(upBtn);
+        btns.appendChild(fileInput);
+        body.appendChild(btns);
+
+        const fileInfo = document.createElement('div');
+        fileInfo.className = 'i18n-csv-fileinfo';
+        body.appendChild(fileInfo);
+
+        const cols = (cfg.fields || []).map(f => f.key);
+        const updateCount = () => {
+            const filled = Object.keys(this.formData[key]).filter(l =>
+                this.formData[key][l] && Object.keys(this.formData[key][l]).length > 0).length;
+            countEl.textContent = `已配置 ${filled}/${langs.length}`;
+        };
+        const renderInfo = (name) => {
+            const en = this.formData[key][cfg.requiredLanguage || 'EN'] || {};
+            const summary = [en.image, en.main_title].filter(Boolean).join(' / ') || '（暂无）';
+            fileInfo.innerHTML = '';
+            if (name) {
+                const p1 = document.createElement('div');
+                p1.innerHTML = `<strong>当前文件：</strong>${name}`;
+                const p2 = document.createElement('div');
+                p2.style.color = 'var(--text-light)';
+                p2.textContent = `EN 摘要：${summary}`;
+                fileInfo.appendChild(p1);
+                fileInfo.appendChild(p2);
+            }
+        };
+
+        tplBtn.addEventListener('click', () => {
+            const header = ['lang', ...cols];
+            const example = [cfg.requiredLanguage || 'EN', ...cols.map(() => '')];
+            this.downloadCsv(cfg.templateName || 'i18n-template.csv', [header, example]);
+        });
+        dlBtn.addEventListener('click', () => {
+            const header = ['lang', ...cols];
+            const rows = Object.keys(this.formData[key]).map(l =>
+                [l, ...cols.map(c => (this.formData[key][l] || {})[c] || '')]);
+            this.downloadCsv('i18n-uploaded.csv', [header, ...rows]);
+        });
+        upBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const parsed = this.parseCsv(ev.target.result);
+                const map = {};
+                const head = parsed[0] || [];
+                for (let i = 1; i < parsed.length; i++) {
+                    const row = parsed[i];
+                    const lang = row[0];
+                    if (!lang) continue;
+                    map[lang] = {};
+                    head.forEach((h, idx) => {
+                        if (idx === 0) return;
+                        if (row[idx] != null && row[idx] !== '') map[lang][h] = row[idx];
+                    });
+                }
+                this.formData[key] = map;
+                updateCount();
+                renderInfo(file.name);
+                this.refreshPlanCards();
+                this.updateDataPreview();
+            };
+            reader.readAsText(file);
+        });
+
+        updateCount();
+        renderInfo(null);
+        box.appendChild(body);
+        parent.appendChild(box);
+        const descHint = this.hintFor(property);
+        if (descHint) parent.appendChild(descHint);
+    }
+
+    downloadCsv(filename, rows) {
+        const csv = rows.map(r => r.map(cell => {
+            const s = String(cell == null ? '' : cell);
+            return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        }).join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    parseCsv(text) {
+        const rows = [];
+        let row = [], field = '', inQuotes = false;
+        for (let i = 0; i < text.length; i++) {
+            const c = text[i];
+            if (inQuotes) {
+                if (c === '"') {
+                    if (text[i + 1] === '"') { field += '"'; i++; }
+                    else inQuotes = false;
+                } else field += c;
+            } else {
+                if (c === '"') inQuotes = true;
+                else if (c === ',') { row.push(field); field = ''; }
+                else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+                else if (c === '\r') { /* skip */ }
+                else field += c;
+            }
+        }
+        if (field.length || row.length) { row.push(field); rows.push(row); }
+        return rows.filter(r => r.length && !(r.length === 1 && r[0] === ''));
+    }
+
+    // 解析本 schema 内的 $ref（如 #/$defs/contentTag），并合并引用处的覆盖字段
+    resolveRef(property) {
+        if (!property || !property.$ref || !property.$ref.startsWith('#/')) return property;
+        const path = property.$ref.slice(2).split('/');
+        let node = this.schema;
+        for (const p of path) node = (node || {})[p];
+        const merged = { ...(node || {}), ...property };
+        delete merged.$ref;
+        return merged;
+    }
+
+    // ===== date-range 控件（起止时间 + 不限勾选；勾选不限时两个时间键从数据中删除，即「不配置表示不限」）=====
+
+    renderDateRange(parent, key, property, required) {
+        const cfg = property['x-range'] || {};
+        const endKey = cfg.endField;
+
+        // 未填写的时间不应以空串出现在数据里（缺省即不限）
+        if (!this.formData[key]) delete this.formData[key];
+        if (endKey && !this.formData[endKey]) delete this.formData[endKey];
+
+        const group = document.createElement('div');
+        group.className = 'form-group';
+        group.appendChild(this.labelFor(property, key, required));
+
+        const rangeWrap = document.createElement('div');
+        rangeWrap.className = 'date-range';
+
+        const mkDt = (k) => {
+            const i = document.createElement('input');
+            i.type = 'datetime-local';
+            i.step = 1;
+            i.className = 'form-control';
+            i.addEventListener('input', () => {
+                if (i.value) this.formData[k] = i.value;
+                else delete this.formData[k];
+                this.updateDataPreview();
+            });
+            return i;
+        };
+        const startInput = mkDt(key);
+        const endInput = mkDt(endKey);
+
+        const arrow = document.createElement('span');
+        arrow.className = 'date-range-arrow';
+        arrow.textContent = '→';
+
+        const unlimited = document.createElement('label');
+        unlimited.className = 'date-range-unlimited';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.addEventListener('change', () => {
+            startInput.disabled = cb.checked;
+            endInput.disabled = cb.checked;
+            if (cb.checked) {
+                startInput.value = '';
+                endInput.value = '';
+                delete this.formData[key];
+                delete this.formData[endKey];
+            }
+            this.updateDataPreview();
+        });
+        unlimited.appendChild(cb);
+        unlimited.appendChild(document.createTextNode(cfg.unlimitedLabel || '不限'));
+
+        rangeWrap.appendChild(startInput);
+        rangeWrap.appendChild(arrow);
+        rangeWrap.appendChild(endInput);
+        rangeWrap.appendChild(unlimited);
+        group.appendChild(rangeWrap);
+
+        const hint = this.hintFor(property);
+        if (hint) group.appendChild(hint);
+        parent.appendChild(group);
+        this.fieldElements[key] = startInput;
+        if (endKey) this.fieldElements[endKey] = endInput;
+        this.fieldElements[`${key}-unlimited`] = cb;
+    }
+
+    // ===== sub-option-table 控件（内容子选项表格：拖拽排序 / 文案 EN / 每项一个多语言 CSV / 子选项图 / 标签 / 示例链接）=====
+
+    renderSubOptionTable(parent, key, property, required) {
+        const itemSchema = property.items || {};
+        const itemProps = itemSchema.properties || {};
+        const count = property.minItems || 4;
+
+        if (!Array.isArray(this.formData[key]) || this.formData[key].length !== count) {
+            this.formData[key] = Array.from({ length: count }, () => {
+                const item = {};
+                Object.keys(itemProps).forEach(pk => {
+                    const p = this.resolveRef(itemProps[pk]);
+                    item[pk] = p.type === 'array' ? [] : (p.type === 'object' ? {} : '');
+                });
+                return item;
+            });
+        }
+
+        const textProp = this.resolveRef(itemProps.text || {});
+        const i18nCfg = textProp['x-i18n'] || {};
+        const reqLang = i18nCfg.requiredLanguage || 'EN';
+        const fieldKeys = (i18nCfg.fields || [{ key: 'text' }]).map(f => f.key);
+
+        const table = document.createElement('div');
+        table.className = 'sub-option-table';
+
+        const head = document.createElement('div');
+        head.className = 'sub-option-head';
+        const headers = [
+            '拖拽排序',
+            `${textProp.title || 'text'} ${reqLang}`,
+            '多语言 CSV',
+            (itemProps.icon && itemProps.icon.title) || 'icon',
+            (this.resolveRef(itemProps.content_tag || {}).title) || 'content_tag',
+            (itemProps.example_model_urls && itemProps.example_model_urls.title) || 'example_model_urls'
+        ];
+        headers.forEach(h => {
+            const cell = document.createElement('div');
+            cell.textContent = h;
+            head.appendChild(cell);
+        });
+        table.appendChild(head);
+
+        this.formData[key].forEach((item, idx) => {
+            table.appendChild(this.buildSubOptionRow(table, key, item, idx, {
+                itemProps, i18nCfg, reqLang, fieldKeys
+            }));
+        });
+
+        parent.appendChild(table);
+        this.fieldElements[key] = table;
+    }
+
+    buildSubOptionRow(table, key, item, idx, ctx) {
+        // 闭包全部引用 item 对象本身，拖拽重排只调整数组顺序，不影响写回目标
+        const { itemProps, i18nCfg, reqLang, fieldKeys } = ctx;
+        const row = document.createElement('div');
+        row.className = 'sub-option-row';
+        row.draggable = true;
+
+        // 1) 拖拽排序
+        const dragCell = document.createElement('div');
+        dragCell.className = 'sub-option-drag';
+        const num = document.createElement('span');
+        num.className = 'sub-option-num';
+        num.textContent = String(idx + 1);
+        const handle = document.createElement('span');
+        handle.className = 'drag-handle';
+        handle.textContent = '⋮⋮';
+        dragCell.appendChild(num);
+        dragCell.appendChild(handle);
+        row.appendChild(dragCell);
+
+        // 2) 子选项文案 EN（只读，取自本项 CSV 的 EN 行）
+        const textCell = document.createElement('div');
+        const enText = document.createElement('div');
+        enText.className = 'sub-option-en-text';
+        const renderEnText = () => {
+            const v = (item.text || {})[reqLang];
+            enText.textContent = v || '（取自 CSV）';
+            enText.classList.toggle('placeholder', !v);
+        };
+        renderEnText();
+        textCell.appendChild(enText);
+        row.appendChild(textCell);
+
+        // 3) 每个子选项一份多语言 CSV
+        const csvCell = document.createElement('div');
+        csvCell.className = 'sub-option-csv';
+        const mkBtn = (text, primary) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'btn btn-small' + (primary ? ' btn-primary' : '');
+            if (!primary) b.style.border = '1px solid var(--border-color)';
+            b.textContent = text;
+            return b;
+        };
+        const tplBtn = mkBtn('下载模板');
+        const dlBtn = mkBtn('下载已上传');
+        const upBtn = mkBtn('替换 CSV', true);
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.csv';
+        fileInput.style.display = 'none';
+        const fileInfo = document.createElement('div');
+        fileInfo.className = 'sub-option-csv-file';
+
+        tplBtn.addEventListener('click', () => {
+            const header = ['lang', ...fieldKeys];
+            const example = [reqLang, ...fieldKeys.map(() => '')];
+            this.downloadCsv(i18nCfg.templateName || 'sub-option-i18n-template.csv', [header, example]);
+        });
+        dlBtn.addEventListener('click', () => {
+            const header = ['lang', ...fieldKeys];
+            const rows = Object.keys(item.text || {})
+                .map(l => [l, item.text[l] || '']);
+            this.downloadCsv('sub-option-i18n-uploaded.csv', [header, ...rows]);
+        });
+        upBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const parsed = this.parseCsv(ev.target.result);
+                const head = parsed[0] || [];
+                const col = head.indexOf(fieldKeys[0]);
+                item.text = {};
+                for (let i = 1; i < parsed.length; i++) {
+                    const r = parsed[i];
+                    const lang = r[0];
+                    if (!lang) continue;
+                    const v = col >= 0 ? r[col] : r[1];
+                    if (v != null && v !== '') item.text[lang] = v;
+                }
+                renderEnText();
+                fileInfo.textContent = `${file.name} · 已配置 ${Object.keys(item.text).length}/${(i18nCfg.languages || []).length}`;
+                this.updateDataPreview();
+            };
+            reader.readAsText(file);
+        });
+
+        const btnWrap = document.createElement('div');
+        btnWrap.className = 'toolbar';
+        btnWrap.appendChild(tplBtn);
+        btnWrap.appendChild(dlBtn);
+        btnWrap.appendChild(upBtn);
+        csvCell.appendChild(btnWrap);
+        csvCell.appendChild(fileInfo);
+        csvCell.appendChild(fileInput);
+        row.appendChild(csvCell);
+
+        // 4) 子选项图（上传，所有语言共用）
+        const iconCell = document.createElement('div');
+        iconCell.className = 'sub-option-icon';
+        const thumb = document.createElement('img');
+        thumb.className = 'sub-option-thumb';
+        thumb.style.display = item.icon ? '' : 'none';
+        if (item.icon) thumb.src = item.icon;
+        const iconBtn = mkBtn('上传图片');
+        const iconInput = document.createElement('input');
+        iconInput.type = 'file';
+        iconInput.accept = 'image/*';
+        iconInput.style.display = 'none';
+        iconBtn.addEventListener('click', () => iconInput.click());
+        iconInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                item.icon = ev.target.result;
+                thumb.src = ev.target.result;
+                thumb.style.display = '';
+                this.updateDataPreview();
+            };
+            reader.readAsDataURL(file);
+        });
+        iconCell.appendChild(thumb);
+        iconCell.appendChild(iconBtn);
+        iconCell.appendChild(iconInput);
+        row.appendChild(iconCell);
+
+        // 5) content_tag（单选）
+        const tagCell = document.createElement('div');
+        const tagProp = this.resolveRef(itemProps.content_tag || {});
+        const tagSelect = document.createElement('select');
+        tagSelect.className = 'form-control';
+        const ph = document.createElement('option');
+        ph.value = '';
+        ph.textContent = '请选择...';
+        tagSelect.appendChild(ph);
+        (tagProp.enum || []).forEach(v => {
+            const o = document.createElement('option');
+            o.value = v;
+            o.textContent = v;
+            tagSelect.appendChild(o);
+        });
+        if (item.content_tag) tagSelect.value = item.content_tag;
+        tagSelect.addEventListener('change', () => {
+            item.content_tag = tagSelect.value;
+            this.updateDataPreview();
+        });
+        tagCell.appendChild(tagSelect);
+        row.appendChild(tagCell);
+
+        // 6) 新用户示例模型链接（多行输入，每行一个 URL）
+        const urlCell = document.createElement('div');
+        const urlArea = document.createElement('textarea');
+        urlArea.className = 'form-control';
+        urlArea.rows = 4;
+        const urlsProp = itemProps.example_model_urls || {};
+        urlArea.placeholder = `每行一个链接${urlsProp.minItems ? `，固定 ${urlsProp.minItems} 个` : ''}`;
+        if (Array.isArray(item.example_model_urls) && item.example_model_urls.length) {
+            urlArea.value = item.example_model_urls.join('\n');
+        }
+        urlArea.addEventListener('input', () => {
+            item.example_model_urls = urlArea.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+            this.updateDataPreview();
+        });
+        urlCell.appendChild(urlArea);
+        row.appendChild(urlCell);
+
+        // 拖拽重排：交换 DOM 后按 DOM 顺序重排 formData（行内闭包持有 item 引用，不受顺序影响）
+        row.addEventListener('dragstart', () => {
+            row.classList.add('dragging');
+            this._draggingSubRow = { row, key, table };
+        });
+        row.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const drag = this._draggingSubRow;
+            if (!drag || drag.table !== table || drag.row === row) return;
+            const rect = row.getBoundingClientRect();
+            if (e.clientY < rect.top + rect.height / 2) {
+                table.insertBefore(drag.row, row);
+            } else {
+                table.insertBefore(drag.row, row.nextSibling);
+            }
+        });
+        row.addEventListener('dragend', () => {
+            row.classList.remove('dragging');
+            this._draggingSubRow = null;
+            const rows = Array.from(table.querySelectorAll('.sub-option-row'));
+            this.formData[key] = rows.map(r => r._subOptionItem);
+            rows.forEach((r, i) => {
+                r.querySelector('.sub-option-num').textContent = String(i + 1);
+            });
+            this.updateDataPreview();
+        });
+        row._subOptionItem = item;
+
+        return row;
+    }
+
+    // ===== plan-card-list 控件 =====
+
+    renderPlanCards(parent, key, property, required) {
+        const itemSchema = property.items || {};
+        const planKeys = (itemSchema.properties?.plan_key?.enum) || [];
+        // 四档定长：按 enum 顺序初始化
+        if (!Array.isArray(this.formData[key]) || this.formData[key].length !== planKeys.length) {
+            this.formData[key] = planKeys.map(pk => ({
+                plan_key: pk, monthly_price_id: '', annual_price_id: ''
+            }));
+        }
+
+        const wrap = document.createElement('div');
+        wrap.className = 'plan-card-list';
+        wrap.dataset.fieldKey = key;
+        this._planCtx = { key, property, itemSchema, wrap };
+
+        planKeys.forEach((pk, idx) => wrap.appendChild(this.buildPlanCard(key, itemSchema, pk, idx)));
+        parent.appendChild(wrap);
+    }
+
+    buildPlanCard(key, itemSchema, planKey, idx) {
+        const card = document.createElement('div');
+        card.className = 'card plan-card';
+        card.dataset.planKey = planKey;
+
+        const i18nMap = itemSchema['x-plan-i18n'] || {};
+        const enRow = (this.formData.i18n && this.formData.i18n.EN) || {};
+        const resolve = (tpl) => enRow[(tpl || '').replace('{plan_key}', planKey)] || '';
+
+        const header = document.createElement('div');
+        header.className = 'card-header plan-card-header';
+        const hTitle = document.createElement('h3');
+        hTitle.textContent = resolve(i18nMap.display_name) || planKey.charAt(0).toUpperCase() + planKey.slice(1);
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-primary';
+        badge.textContent = planKey;
+        header.appendChild(hTitle);
+        header.appendChild(badge);
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'card-body';
+
+        // 套餐展示名 EN（只读，取自 i18n）
+        body.appendChild(this.readonlyGroup('套餐展示名 EN', resolve(i18nMap.display_name), false));
+
+        // Monthly / Annual price_id（可编辑）
+        const mp = itemSchema.properties.monthly_price_id;
+        const ap = itemSchema.properties.annual_price_id;
+        body.appendChild(this.buildSelectGroup(`${key}.${idx}.monthly_price_id`, mp, true,
+            v => { this.formData[key][idx].monthly_price_id = v; this.updateDataPreview(); },
+            this.formData[key][idx].monthly_price_id));
+        body.appendChild(this.buildSelectGroup(`${key}.${idx}.annual_price_id`, ap, true,
+            v => { this.formData[key][idx].annual_price_id = v; this.updateDataPreview(); },
+            this.formData[key][idx].annual_price_id));
+
+        // 套餐文案配置（只读，取自多语言 CSV 的 EN 行）
+        if (i18nMap.copy) {
+            body.appendChild(this.readonlyGroup('套餐文案配置', resolve(i18nMap.copy), true));
+        }
+
+        card.appendChild(body);
+        return card;
+    }
+
+    readonlyGroup(labelText, value, multiline) {
+        const group = document.createElement('div');
+        group.className = 'form-group';
+        const label = document.createElement('label');
+        label.className = 'form-label';
+        const span = document.createElement('span');
+        span.textContent = labelText;
+        const r = document.createElement('span');
+        r.className = 'required';
+        r.textContent = ' *';
+        label.appendChild(span);
+        label.appendChild(r);
+        group.appendChild(label);
+
+        const el = document.createElement(multiline ? 'textarea' : 'input');
+        el.className = 'form-control';
+        el.disabled = true;
+        if (value) el.value = value;
+        else el.placeholder = '（只读，取自 CSV 的 EN 行）';
+        group.appendChild(el);
+        return group;
+    }
+
+    // CSV 上传后刷新套餐卡的只读展示
+    refreshPlanCards() {
+        if (!this._planCtx) return;
+        const { key, itemSchema, wrap } = this._planCtx;
+        const planKeys = (itemSchema.properties?.plan_key?.enum) || [];
+        wrap.innerHTML = '';
+        planKeys.forEach((pk, idx) => wrap.appendChild(this.buildPlanCard(key, itemSchema, pk, idx)));
     }
 
     getFormData() {

@@ -10,9 +10,9 @@ class SchemaLoader {
             reader.onload = (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    this.schemas = data;
+                    this.schemas = this.normalize(data);
                     this.updateSchemaSelector();
-                    resolve(data);
+                    resolve(this.schemas);
                 } catch (error) {
                     reject(new Error(`JSON解析失败: ${error.message}`));
                 }
@@ -26,6 +26,23 @@ class SchemaLoader {
 
     getSchema(name) {
         return this.schemas[name] || null;
+    }
+
+    // 把不同来源的 JSON 统一成 { schema名: schema对象 } 映射：
+    // 1) mc.json 形如 { config_schemas: {...} } —— 拆掉外层 config_schemas
+    // 2) 单个 schema 文件（顶层带 $schema/type/properties）—— 包成单条映射
+    // 3) 已经是映射表 —— 原样返回
+    normalize(data) {
+        if (data && typeof data === 'object' && data.config_schemas
+            && typeof data.config_schemas === 'object') {
+            return data.config_schemas;
+        }
+        if (data && typeof data === 'object'
+            && (data.$schema || data.type === 'object' || data.properties)) {
+            const key = data.$id || data.title || 'schema';
+            return { [key]: data };
+        }
+        return data;
     }
 
     getAllSchemaNames() {

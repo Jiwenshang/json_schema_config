@@ -23,6 +23,13 @@
                     <button id="exportBtn" class="btn btn-primary" style="display:none;">💾 导出</button>
                 </div>
             </div>
+
+            <div class="controls" style="margin-top: 8px;">
+                <input type="text" id="apiBaseInput" class="schema-selector" style="min-width: 280px;" placeholder="中台地址，如 http://localhost:8080">
+                <button id="loadRemoteBtn" class="btn btn-primary">🌐 从中台加载Schema</button>
+                <button id="loginBtn" class="btn btn-primary">🔑 登录</button>
+                <span id="authStatus" style="font-size: 12px; color: #999; align-self: center;"></span>
+            </div>
         </div>
 
         <div class="content">
@@ -54,8 +61,9 @@
         <p>加载中...</p>
     </div>
 
-    <script src="schema-loader.js"></script>
-    <script src="form-renderer.js"></script>
-    <script src="app.js"></script>
+    <script src="schema-loader.js?v=20260713"></script>
+    <script src="form-renderer.js?v=20260713"></script>
+    <script src="api-client.js?v=20260713"></script>
+    <script src="app.js?v=20260713"></script>
 </body>
 </html>
