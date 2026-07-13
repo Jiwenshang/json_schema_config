@@ -1130,7 +1130,9 @@ class FormRenderer {
     renderBundleCsv(parent, section) {
         const keys = section.bundle;
         const props = this.schema.properties || {};
-        const langs = ['EN', 'ZH', 'ES', 'KO', 'RU', 'PT', 'JA', 'DE', 'IT', 'TR', 'FR'];
+        const cfg = section['x-i18n'] || {};
+        const langs = cfg.languages || ['EN', 'ZH', 'ES', 'KO', 'RU', 'PT', 'JA', 'DE', 'IT', 'TR', 'FR'];
+        const reqLang = cfg.requiredLanguage || 'EN';
         keys.forEach(k => {
             if (!this.formData[k] || typeof this.formData[k] !== 'object') this.formData[k] = {};
         });
@@ -1146,9 +1148,22 @@ class FormRenderer {
 
         const hint = document.createElement('p');
         hint.className = 'section-subtitle';
-        const labels = keys.map(k => (props[k] && props[k].title) || k);
-        hint.textContent = `统一配置 ${labels.join('、')}；EN 必填，其他语言未配置时 fallback 到 EN。`;
+        // CSV 列头标签：优先分区 x-i18n.fields 的 label，回退到属性 title / key
+        const fieldDefs = cfg.fields || [];
+        const labels = keys.map(k => {
+            const f = fieldDefs.find(f => f.key === k);
+            return (f && f.label) || (props[k] && props[k].title) || k;
+        });
+        hint.textContent = `统一配置 ${labels.join('、')}；${reqLang} 必填，其他语言未配置时 fallback 到 ${reqLang}。`;
         body.appendChild(hint);
+
+        // 表头单元格 -> 属性 key：兼容属性 key 与中文标题（title）两种写法
+        const headerToKey = (h) => {
+            const t = (h || '').trim();
+            if (keys.includes(t)) return t;
+            const li = labels.indexOf(t);
+            return li >= 0 ? keys[li] : null;
+        };
 
         const btns = document.createElement('div');
         btns.className = 'toolbar';
@@ -1187,12 +1202,12 @@ class FormRenderer {
         };
 
         tplBtn.addEventListener('click', () => {
-            const header = ['lang', ...keys];
-            const example = ['EN', ...keys.map(() => '')];
-            this.downloadCsv(`${section.key || 'i18n'}-template.csv`, [header, example]);
+            const header = ['语言', ...labels];
+            const rows = langs.map(l => [l, ...keys.map(() => '')]);
+            this.downloadCsv(cfg.templateName || `${section.key || 'i18n'}-template.csv`, [header, ...rows]);
         });
         dlBtn.addEventListener('click', () => {
-            const header = ['lang', ...keys];
+            const header = ['语言', ...labels];
             const rows = langs
                 .filter(l => keys.some(k => this.formData[k][l]))
                 .map(l => [l, ...keys.map(k => this.formData[k][l] || '')]);
@@ -1209,11 +1224,13 @@ class FormRenderer {
                 keys.forEach(k => { this.formData[k] = {}; });
                 for (let i = 1; i < parsed.length; i++) {
                     const row = parsed[i];
-                    const lang = row[0];
+                    const lang = (row[0] || '').trim();
                     if (!lang) continue;
                     head.forEach((h, idx) => {
-                        if (idx === 0 || !keys.includes(h)) return;
-                        if (row[idx] != null && row[idx] !== '') this.formData[h][lang] = row[idx];
+                        if (idx === 0) return;
+                        const k = headerToKey(h);
+                        if (!k) return;
+                        if (row[idx] != null && row[idx] !== '') this.formData[k][lang] = row[idx];
                     });
                 }
                 updateCount();
@@ -1296,6 +1313,13 @@ class FormRenderer {
         body.appendChild(fileInfo);
 
         const cols = (cfg.fields || []).map(f => f.key);
+        const colLabels = (cfg.fields || []).map(f => f.label || f.key);
+        // 表头单元格 -> 字段 key：兼容 key 与中文标签（label）两种写法；未知列名原样保留（向后兼容）
+        const headerToKey = (h) => {
+            const t = (h || '').trim();
+            const f = (cfg.fields || []).find(f => f.key === t || f.label === t);
+            return f ? f.key : t;
+        };
         const updateCount = () => {
             const filled = Object.keys(this.formData[key]).filter(l =>
                 this.formData[key][l] && Object.keys(this.formData[key][l]).length > 0).length;
@@ -1317,12 +1341,12 @@ class FormRenderer {
         };
 
         tplBtn.addEventListener('click', () => {
-            const header = ['lang', ...cols];
-            const example = [cfg.requiredLanguage || 'EN', ...cols.map(() => '')];
-            this.downloadCsv(cfg.templateName || 'i18n-template.csv', [header, example]);
+            const header = ['语言', ...colLabels];
+            const rows = langs.map(l => [l, ...cols.map(() => '')]);
+            this.downloadCsv(cfg.templateName || 'i18n-template.csv', [header, ...rows]);
         });
         dlBtn.addEventListener('click', () => {
-            const header = ['lang', ...cols];
+            const header = ['语言', ...colLabels];
             const rows = Object.keys(this.formData[key]).map(l =>
                 [l, ...cols.map(c => (this.formData[key][l] || {})[c] || '')]);
             this.downloadCsv('i18n-uploaded.csv', [header, ...rows]);
@@ -1338,13 +1362,15 @@ class FormRenderer {
                 const head = parsed[0] || [];
                 for (let i = 1; i < parsed.length; i++) {
                     const row = parsed[i];
-                    const lang = row[0];
+                    const lang = (row[0] || '').trim();
                     if (!lang) continue;
-                    map[lang] = {};
+                    const langValues = {};
                     head.forEach((h, idx) => {
                         if (idx === 0) return;
-                        if (row[idx] != null && row[idx] !== '') map[lang][h] = row[idx];
+                        if (row[idx] != null && row[idx] !== '') langValues[headerToKey(h)] = row[idx];
                     });
+                    // 整行为空的语言不写入，避免产生空对象
+                    if (Object.keys(langValues).length > 0) map[lang] = langValues;
                 }
                 this.formData[key] = map;
                 updateCount();
@@ -1368,7 +1394,8 @@ class FormRenderer {
             const s = String(cell == null ? '' : cell);
             return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
         }).join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        // UTF-8 BOM：中文表头在 Excel 中不乱码
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -1378,6 +1405,7 @@ class FormRenderer {
     }
 
     parseCsv(text) {
+        if (text && text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // 去除 UTF-8 BOM
         const rows = [];
         let row = [], field = '', inQuotes = false;
         for (let i = 0; i < text.length; i++) {
@@ -1585,13 +1613,14 @@ class FormRenderer {
         const fileInfo = document.createElement('div');
         fileInfo.className = 'sub-option-csv-file';
 
+        const fieldLabels = (i18nCfg.fields || [{ key: 'text' }]).map(f => f.label || f.key);
         tplBtn.addEventListener('click', () => {
-            const header = ['lang', ...fieldKeys];
-            const example = [reqLang, ...fieldKeys.map(() => '')];
-            this.downloadCsv(i18nCfg.templateName || 'sub-option-i18n-template.csv', [header, example]);
+            const header = ['语言', ...fieldLabels];
+            const rows = (i18nCfg.languages || [reqLang]).map(l => [l, ...fieldKeys.map(() => '')]);
+            this.downloadCsv(i18nCfg.templateName || 'sub-option-i18n-template.csv', [header, ...rows]);
         });
         dlBtn.addEventListener('click', () => {
-            const header = ['lang', ...fieldKeys];
+            const header = ['语言', ...fieldLabels];
             const rows = Object.keys(item.text || {})
                 .map(l => [l, item.text[l] || '']);
             this.downloadCsv('sub-option-i18n-uploaded.csv', [header, ...rows]);
@@ -1604,11 +1633,15 @@ class FormRenderer {
             reader.onload = (ev) => {
                 const parsed = this.parseCsv(ev.target.result);
                 const head = parsed[0] || [];
-                const col = head.indexOf(fieldKeys[0]);
+                // 表头兼容字段 key 与中文标签两种写法
+                const col = head.findIndex(h => {
+                    const t = (h || '').trim();
+                    return t === fieldKeys[0] || t === fieldLabels[0];
+                });
                 item.text = {};
                 for (let i = 1; i < parsed.length; i++) {
                     const r = parsed[i];
-                    const lang = r[0];
+                    const lang = (r[0] || '').trim();
                     if (!lang) continue;
                     const v = col >= 0 ? r[col] : r[1];
                     if (v != null && v !== '') item.text[lang] = v;
