@@ -345,6 +345,37 @@ async function submitToCenter() {
     }
 }
 
+// 图片直传：登录 → 拿 STS 凭证（后端校验 fieldPath 确为图片字段）→ SigV4 直传 S3，返回 S3 key
+async function uploadImageToS3(meta, file, fieldPath) {
+    const ext = ((file.name || '').split('.').pop() || '').toLowerCase();
+    const format = ['png', 'jpg', 'jpeg', 'webp'].includes(ext) ? ext : null;
+    if (!format) {
+        throw new Error('仅支持 png / jpg / jpeg / webp 图片');
+    }
+    if (!apiClient.isLoggedIn()) {
+        const ok = await showLoginModal();
+        if (!ok) {
+            throw new Error('上传图片需要先登录中台');
+        }
+    }
+    let creds;
+    try {
+        creds = await apiClient.issueImageUploadToken(meta.dataId, meta.key, fieldPath, format);
+    } catch (err) {
+        if (err.authRequired) {
+            updateAuthStatus();
+            const ok = await showLoginModal();
+            if (!ok) throw new Error('上传图片需要先登录中台');
+            creds = await apiClient.issueImageUploadToken(meta.dataId, meta.key, fieldPath, format);
+        } else if (err.status === 400) {
+            throw new Error(`该字段未被中台识别为图片字段（${fieldPath}）：${err.message}`);
+        } else {
+            throw err;
+        }
+    }
+    return S3DirectUploader.put(creds, file);
+}
+
 // ==================== 中台 OpenAPI 对接结束 ====================
 
 function loadSchema(schemaName) {
@@ -368,6 +399,13 @@ function loadSchema(schemaName) {
         currentFormData = data;
         updatePreview(data);
     });
+
+    // 中台加载的 schema 自带 data_id/key：注入图片直传器，选图后走
+    // upload-token → S3 直传 → 字段存 S3 key；本地 schema 无处签发凭证，保持 base64
+    const meta = remoteSchemaMeta[schemaName];
+    if (meta && meta.dataId && meta.key) {
+        formRenderer.setImageUploader((file, fieldPath) => uploadImageToS3(meta, file, fieldPath));
+    }
 
     formRenderer.render();
 

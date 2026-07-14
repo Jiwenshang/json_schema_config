@@ -123,6 +123,14 @@ class McApiClient {
         return this.request('POST', this.entryPath(dataId, key, '/publish'));
     }
 
+    // 签发图片直传 S3 的 STS 临时凭证（image srv）。
+    // path 为字段在 payload 中的路径（可带数组下标，如 sub_options[2].icon）；
+    // format 为 png|jpg|jpeg|webp。返回 {access_key_id, secret_access_key,
+    // session_token, region, bucket, key}，直传成功后把 key 写入字段值。
+    issueImageUploadToken(dataId, key, path, format) {
+        return this.request('POST', this.entryPath(dataId, key, '/image/upload-token'), { path, format });
+    }
+
     // 存在则更新草稿，不存在则创建
     async saveEntry(dataId, key, payload) {
         const existing = await this.getEntry(dataId, key);

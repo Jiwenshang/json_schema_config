@@ -6,6 +6,37 @@ class FormRenderer {
         this.formData = {};
         this.fieldElements = {};
         this.dragState = {};
+        // 图片直传器：async (file, fieldPath) => S3 key。
+        // 由宿主在绑定中台配置（已知 data_id/key）时注入；未注入时回退 base64（纯本地模式）。
+        this.imageUploader = null;
+    }
+
+    setImageUploader(fn) {
+        this.imageUploader = fn;
+    }
+
+    // 图片统一入口：直传模式返回 {value: S3 key, previewUrl: 本地 blob}，
+    // 本地模式返回 {value: base64, previewUrl: base64}。失败抛错由调用方提示。
+    async pickImage(file, fieldPath) {
+        if (this.imageUploader) {
+            const key = await this.imageUploader(file, fieldPath);
+            return { value: key, previewUrl: URL.createObjectURL(file) };
+        }
+        const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => resolve(ev.target.result);
+            reader.onerror = () => reject(new Error('读取文件失败'));
+            reader.readAsDataURL(file);
+        });
+        return { value: dataUrl, previewUrl: dataUrl };
+    }
+
+    // 已存值的预览地址：S3 key 拼 CDN 域名，base64/URL 原样返回
+    static previewUrlFor(value) {
+        if (typeof value !== 'string' || !value) return '';
+        if (/^(data:|https?:\/\/)/.test(value)) return value;
+        const cdn = (window.MC_CDN_BASE || 'https://vast-plugin-data.rg1.data.tripo3d.com').replace(/\/+$/, '');
+        return `${cdn}/${value}`;
     }
 
     render() {
@@ -419,18 +450,24 @@ class FormRenderer {
         uploadContainer.appendChild(label);
         uploadContainer.appendChild(preview);
 
-        input.addEventListener('change', (e) => {
+        input.addEventListener('change', async (e) => {
             const file = e.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    this.formData[key] = event.target.result;
-                    preview.src = event.target.result;
-                    preview.style.display = 'block';
-                    label.style.display = 'none';
-                    this.updateDataPreview();
-                };
-                reader.readAsDataURL(file);
+            if (!file) return;
+            const origText = label.textContent;
+            label.textContent = '上传中…';
+            input.disabled = true;
+            try {
+                const { value, previewUrl } = await this.pickImage(file, key);
+                this.formData[key] = value;
+                preview.src = previewUrl;
+                preview.style.display = 'block';
+                label.style.display = 'none';
+                this.updateDataPreview();
+            } catch (err) {
+                label.textContent = origText;
+                alert(`图片上传失败：${err.message}`);
+            } finally {
+                input.disabled = false;
             }
         });
 
@@ -1669,24 +1706,32 @@ class FormRenderer {
         const thumb = document.createElement('img');
         thumb.className = 'sub-option-thumb';
         thumb.style.display = item.icon ? '' : 'none';
-        if (item.icon) thumb.src = item.icon;
+        if (item.icon) thumb.src = FormRenderer.previewUrlFor(item.icon);
         const iconBtn = mkBtn('上传图片');
         const iconInput = document.createElement('input');
         iconInput.type = 'file';
         iconInput.accept = 'image/*';
         iconInput.style.display = 'none';
         iconBtn.addEventListener('click', () => iconInput.click());
-        iconInput.addEventListener('change', (e) => {
+        iconInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                item.icon = ev.target.result;
-                thumb.src = ev.target.result;
+            const origText = iconBtn.textContent;
+            iconBtn.textContent = '上传中…';
+            iconBtn.disabled = true;
+            try {
+                // 数组下标不参与后端 slug 校验（normalizeSlug 会剥离），用当前行号仅为审计可读
+                const { value, previewUrl } = await this.pickImage(file, `${key}[${idx}].icon`);
+                item.icon = value;
+                thumb.src = previewUrl;
                 thumb.style.display = '';
                 this.updateDataPreview();
-            };
-            reader.readAsDataURL(file);
+            } catch (err) {
+                alert(`图片上传失败：${err.message}`);
+            } finally {
+                iconBtn.textContent = origText;
+                iconBtn.disabled = false;
+            }
         });
         iconCell.appendChild(thumb);
         iconCell.appendChild(iconBtn);
