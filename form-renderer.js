@@ -9,10 +9,16 @@ class FormRenderer {
         // 图片直传器：async (file, fieldPath) => S3 key。
         // 由宿主在绑定中台配置（已知 data_id/key）时注入；未注入时回退 base64（纯本地模式）。
         this.imageUploader = null;
+        // 编辑模式的初始数据（已有 entry 的 payload）：render 时合入 formData 并回填各控件
+        this.initialData = null;
     }
 
     setImageUploader(fn) {
         this.imageUploader = fn;
+    }
+
+    setInitialData(data) {
+        this.initialData = data ? JSON.parse(JSON.stringify(data)) : null;
     }
 
     // 图片统一入口：直传模式返回 {value: S3 key, previewUrl: 本地 blob}，
@@ -42,6 +48,10 @@ class FormRenderer {
     render() {
         this.container.innerHTML = '';
         this.formData = this.initializeFormData();
+        if (this.initialData) {
+            const init = JSON.parse(JSON.stringify(this.initialData));
+            Object.keys(init).forEach(k => { this.formData[k] = init[k]; });
+        }
         this.fieldElements = {};
 
         const title = document.createElement('h2');
@@ -207,6 +217,13 @@ class FormRenderer {
         input.id = key;
         input.name = key;
 
+        const existing = this.formData[key];
+        if (property.type === 'boolean') {
+            input.checked = existing === true;
+        } else if (existing != null && existing !== '' && !(typeof existing === 'number' && existing === 0)) {
+            input.value = existing;
+        }
+
         input.addEventListener('input', () => {
             if (property.type === 'boolean') {
                 this.formData[key] = input.checked;
@@ -243,6 +260,10 @@ class FormRenderer {
             });
         }
 
+        if (this.formData[key] != null && this.formData[key] !== '') {
+            select.value = String(this.formData[key]);
+        }
+
         select.addEventListener('change', () => {
             this.formData[key] = select.value;
             this.updateDataPreview();
@@ -275,12 +296,15 @@ class FormRenderer {
 
         const items = property.items?.enum || property.enum || [];
         const enumLabels = property['x-enum-labels'] || {};
+        if (!Array.isArray(this.formData[key])) this.formData[key] = [];
+        const preSelected = this.formData[key];
 
         items.forEach(value => {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.value = value;
             checkbox.id = `${key}-${value}`;
+            checkbox.checked = preSelected.includes(value);
 
             const label = document.createElement('label');
             label.htmlFor = `${key}-${value}`;
@@ -307,8 +331,6 @@ class FormRenderer {
         group.appendChild(checkboxGroup);
         this.container.appendChild(group);
         this.fieldElements[key] = input;
-
-        this.formData[key] = [];
     }
 
     renderI18nField(key, property, isRequired) {
@@ -324,7 +346,7 @@ class FormRenderer {
         const contents = document.createElement('div');
         contents.className = 'i18n-contents';
 
-        this.formData[key] = {};
+        if (!this.formData[key] || typeof this.formData[key] !== 'object') this.formData[key] = {};
 
         languages.forEach((lang, index) => {
             const tab = document.createElement('button');
@@ -340,6 +362,7 @@ class FormRenderer {
             textarea.className = 'form-control';
             textarea.placeholder = `输入 ${lang} 文本...`;
             textarea.rows = 3;
+            if (this.formData[key][lang]) textarea.value = this.formData[key][lang];
 
             textarea.addEventListener('input', () => {
                 this.formData[key][lang] = textarea.value;
@@ -380,7 +403,7 @@ class FormRenderer {
         const contents = document.createElement('div');
         contents.className = 'i18n-contents';
 
-        this.formData[key] = {};
+        if (!this.formData[key] || typeof this.formData[key] !== 'object') this.formData[key] = {};
 
         languages.forEach((lang, index) => {
             const tab = document.createElement('button');
@@ -396,6 +419,7 @@ class FormRenderer {
             textarea.className = 'form-control';
             textarea.placeholder = `支持Markdown和富文本 (${lang})`;
             textarea.rows = 4;
+            if (this.formData[key][lang]) textarea.value = this.formData[key][lang];
 
             textarea.addEventListener('input', () => {
                 this.formData[key][lang] = textarea.value;
@@ -445,6 +469,14 @@ class FormRenderer {
         const preview = document.createElement('img');
         preview.className = 'image-preview';
         preview.style.display = 'none';
+
+        // 编辑模式：已有值（S3 key / URL / base64）直接出预览，重传即覆盖
+        if (typeof this.formData[key] !== 'string') this.formData[key] = '';
+        if (this.formData[key]) {
+            preview.src = FormRenderer.previewUrlFor(this.formData[key]);
+            preview.style.display = 'block';
+            label.textContent = '重新上传图片';
+        }
 
         uploadContainer.appendChild(input);
         uploadContainer.appendChild(label);
@@ -496,7 +528,6 @@ class FormRenderer {
         if (hint) group.appendChild(hint);
         this.container.appendChild(group);
         this.fieldElements[key] = input;
-        this.formData[key] = '';
     }
 
     renderDragSortList(key, property, isRequired) {
@@ -506,6 +537,8 @@ class FormRenderer {
         listContainer.id = `${key}-list`;
         listContainer.className = 'drag-sort-list';
 
+        // 编辑模式：暂存已有项，清空后经 addArrayItem 逐项重建（数据 + 行 DOM 一起恢复）
+        const existingItems = Array.isArray(this.formData[key]) ? this.formData[key] : [];
         this.formData[key] = [];
 
         const controlsDiv = document.createElement('div');
@@ -536,11 +569,15 @@ class FormRenderer {
         this.container.appendChild(group);
         this.fieldElements[key] = listContainer;
 
+        existingItems.forEach(itemData => {
+            this.addArrayItem(key, property, listContainer, itemCountSpan, itemData);
+        });
+
         // 初始化拖拽
         this.initDragSort(listContainer, key, itemCountSpan);
     }
 
-    addArrayItem(key, property, container, itemCountSpan) {
+    addArrayItem(key, property, container, itemCountSpan, existingData) {
         const itemIndex = this.formData[key].length;
         const itemData = {};
         const itemSchema = property.items;
@@ -556,6 +593,9 @@ class FormRenderer {
                 itemData[propKey] = '';
             }
         });
+        if (existingData && typeof existingData === 'object') {
+            Object.assign(itemData, JSON.parse(JSON.stringify(existingData)));
+        }
 
         this.formData[key].push(itemData);
 
@@ -601,6 +641,7 @@ class FormRenderer {
                     const checkbox = document.createElement('input');
                     checkbox.type = 'checkbox';
                     checkbox.value = value;
+                    checkbox.checked = Array.isArray(itemData[propKey]) && itemData[propKey].includes(value);
 
                     const cbLabel = document.createElement('label');
                     cbLabel.textContent = value;
@@ -627,6 +668,7 @@ class FormRenderer {
                 fieldInput.type = 'url';
                 fieldInput.className = 'form-control';
                 fieldInput.placeholder = 'Enter URL...';
+                if (itemData[propKey]) fieldInput.value = itemData[propKey];
 
                 fieldInput.addEventListener('input', () => {
                     this.formData[key][itemIndex][propKey] = fieldInput.value;
@@ -647,6 +689,7 @@ class FormRenderer {
                     opt.textContent = value;
                     fieldInput.appendChild(opt);
                 });
+                if (itemData[propKey]) fieldInput.value = itemData[propKey];
 
                 fieldInput.addEventListener('change', () => {
                     this.formData[key][itemIndex][propKey] = fieldInput.value;
@@ -712,6 +755,7 @@ class FormRenderer {
                 fieldInput = document.createElement('input');
                 fieldInput.type = 'text';
                 fieldInput.className = 'form-control';
+                if (itemData[propKey] != null && itemData[propKey] !== '') fieldInput.value = itemData[propKey];
 
                 fieldInput.addEventListener('input', () => {
                     this.formData[key][itemIndex][propKey] = fieldInput.value;
@@ -947,12 +991,14 @@ class FormRenderer {
                         // boolean 字段用 select 表达（如 是否展示在图鉴 是/否）时还原类型
                         this.formData[key] = property.type === 'boolean' ? v === 'true' : v;
                         this.updateDataPreview();
-                    }));
+                    },
+                    this.formData[key] != null && this.formData[key] !== '' ? String(this.formData[key]) : null));
                 break;
             case 'input':
             case 'text':
                 parent.appendChild(this.buildInputGroup(key, property, required,
-                    v => { this.formData[key] = v; this.updateDataPreview(); }));
+                    v => { this.formData[key] = v; this.updateDataPreview(); },
+                    this.formData[key] !== '' ? this.formData[key] : null));
                 break;
             default: {
                 // 其余控件（image-upload / i18n-upload / multi-select / drag-sort-list / checkbox 等）
@@ -1100,6 +1146,9 @@ class FormRenderer {
             altInput.type = 'text';
             altInput.className = 'form-control';
             altInput.placeholder = `如 3D export privilege preview（${lang}）`;
+            if (this.formData[key].localized[lang].image_alt) {
+                altInput.value = this.formData[key].localized[lang].image_alt;
+            }
             altInput.addEventListener('input', () => {
                 this.formData[key].localized[lang].image_alt = altInput.value;
                 this.updateDataPreview();
@@ -1120,6 +1169,10 @@ class FormRenderer {
             const preview = document.createElement('img');
             preview.className = 'image-preview';
             preview.style.display = 'none';
+            if (this.formData[key].localized[lang].image) {
+                preview.src = FormRenderer.previewUrlFor(this.formData[key].localized[lang].image);
+                preview.style.display = 'block';
+            }
             upInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -1506,6 +1559,8 @@ class FormRenderer {
         };
         const startInput = mkDt(key);
         const endInput = mkDt(endKey);
+        if (this.formData[key]) startInput.value = this.formData[key];
+        if (endKey && this.formData[endKey]) endInput.value = this.formData[endKey];
 
         const arrow = document.createElement('span');
         arrow.className = 'date-range-arrow';
@@ -1649,6 +1704,9 @@ class FormRenderer {
         fileInput.style.display = 'none';
         const fileInfo = document.createElement('div');
         fileInfo.className = 'sub-option-csv-file';
+        if (item.text && Object.keys(item.text).length) {
+            fileInfo.textContent = `已保存配置 · 已配置 ${Object.keys(item.text).length}/${(i18nCfg.languages || []).length}`;
+        }
 
         const fieldLabels = (i18nCfg.fields || [{ key: 'text' }]).map(f => f.label || f.key);
         tplBtn.addEventListener('click', () => {

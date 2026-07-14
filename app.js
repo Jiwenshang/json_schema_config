@@ -4,6 +4,10 @@ let currentFormData = {};
 let apiClient = null;
 // 从中台加载的 schema 名 -> {dataId, key}，用于提交时定位 config entry
 let remoteSchemaMeta = {};
+// 同一配置位 (data_id, key) 允许多条数据：
+// currentEntries 为该配置位的条目列表，currentEntryId 为正在编辑的条目 id（null = 新增模式）
+let currentEntries = [];
+let currentEntryId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     schemaLoader = new SchemaLoader();
@@ -131,7 +135,13 @@ function initializeApiControls() {
             showAlert('✓ 已退出登录', 'info');
         } else {
             apiClient.setBaseURL(apiBaseInput.value);
-            await showLoginModal();
+            const ok = await showLoginModal();
+            // 登录前选中的中台 schema 读不到已有条目，登录后重载以进入正确的 新增/编辑 模式。
+            // 只在独立登录入口做重载——提交/上传中途的补登录（showLoginModal 复用）不能重载，会冲掉未保存的表单
+            const current = schemaLoader.getCurrentSchemaName();
+            if (ok && current && remoteSchemaMeta[current]) {
+                loadSchema(current);
+            }
         }
     });
 
@@ -280,7 +290,9 @@ async function showLoginModal() {
     }
 }
 
-// 提交表单数据到中台 config entry
+// 提交表单数据到中台 config entry：
+// 编辑模式（currentEntryId 非空）→ PUT items/:id 更新该条目；
+// 新增模式 → POST 创建新条目（同一配置位可有多条），成功后转入编辑模式
 async function submitToCenter() {
     if (!formRenderer) {
         return;
@@ -289,10 +301,12 @@ async function submitToCenter() {
     const formData = formRenderer.getFormData();
     const schemaName = schemaLoader.getCurrentSchemaName();
 
-    // 确定 data_id / key：中台加载的 schema 自带；本地文件加载的需要手动指定
+    // 确定 data_id / key：中台加载的 schema 自带；本地文件加载的需要手动指定。
+    // 本地 schema 不知道条目 id，每次提交都会新建一条
     let meta = remoteSchemaMeta[schemaName];
+    const isRemote = !!meta;
     if (!meta) {
-        const values = await showFormModal('指定配置位置（本地 Schema 需手动填写）', [
+        const values = await showFormModal('指定配置位置（本地 Schema 需手动填写，每次提交都会新建一条）', [
             { name: 'dataId', label: 'data_id（配置文件名）', value: schemaName || '' },
             { name: 'key', label: 'key（配置 Key）', placeholder: 'default' },
         ], '继续提交');
@@ -315,15 +329,26 @@ async function submitToCenter() {
 
     try {
         showLoading(true);
-        const { entry, created } = await apiClient.saveEntry(meta.dataId, meta.key, formData);
+        let entry;
+        let created;
+        if (isRemote && currentEntryId) {
+            entry = await apiClient.updateEntry(meta.dataId, meta.key, currentEntryId, formData);
+            created = false;
+        } else {
+            entry = await apiClient.createEntry(meta.dataId, meta.key, formData);
+            created = true;
+            currentEntryId = entry.id;
+            currentEntries.push(entry);
+            document.getElementById('submitBtn').textContent = `💾 保存修改（条目 #${entry.id}）`;
+        }
         showLoading(false);
-        showAlert(`✓ ${created ? '创建' : '更新'}成功: ${meta.dataId}/${meta.key}（状态: ${entry.status}）`, 'success');
+        showAlert(`✓ ${created ? '新建' : '更新'}条目 #${entry.id} 成功: ${meta.dataId}/${meta.key}（状态: ${entry.status}）`, 'success');
 
-        if (confirm('草稿已保存到中台，是否立即发布？')) {
+        if (confirm(`草稿已保存到中台（条目 #${entry.id}），是否立即发布？`)) {
             showLoading(true);
-            const published = await apiClient.publishEntry(meta.dataId, meta.key);
+            const published = await apiClient.publishEntry(meta.dataId, meta.key, entry.id);
             showLoading(false);
-            showAlert(`✓ 已发布: ${meta.dataId}/${meta.key}（版本: ${published.published_version}）`, 'success');
+            showAlert(`✓ 已发布条目 #${entry.id}: ${meta.dataId}/${meta.key}（版本: ${published.published_version}）`, 'success');
         }
     } catch (error) {
         showLoading(false);
@@ -338,7 +363,7 @@ async function submitToCenter() {
         if (error.status === 422) {
             showAlert('✗ 提交失败: 表单数据不符合中台 Schema 校验，请检查必填项', 'error');
         } else if (error.status === 404) {
-            showAlert(`✗ 提交失败: 中台不存在该 Schema (${meta.dataId}/${meta.key})`, 'error');
+            showAlert(`✗ 提交失败: 中台不存在该 Schema 或条目 (${meta.dataId}/${meta.key}${currentEntryId ? ' #' + currentEntryId : ''})`, 'error');
         } else {
             showAlert(`✗ 提交失败: ${error.message}`, 'error');
         }
@@ -378,7 +403,7 @@ async function uploadImageToS3(meta, file, fieldPath) {
 
 // ==================== 中台 OpenAPI 对接结束 ====================
 
-function loadSchema(schemaName) {
+async function loadSchema(schemaName) {
     const schema = schemaLoader.getSchema(schemaName);
     if (!schema) {
         showAlert('✗ Schema不存在', 'error');
@@ -386,36 +411,130 @@ function loadSchema(schemaName) {
     }
 
     schemaLoader.setCurrentSchema(schemaName);
+
+    // 同一配置位允许多条数据：拉取条目列表，默认编辑最新一条；没有条目则进入新增模式。
+    // 未登录时读不到列表（接口需认证），按新增渲染并提示。
+    const meta = remoteSchemaMeta[schemaName];
+    currentEntries = [];
+    if (meta && meta.dataId && meta.key) {
+        if (apiClient.isLoggedIn()) {
+            try {
+                showLoading(true);
+                currentEntries = await apiClient.listEntries(meta.dataId, meta.key);
+            } catch (e) {
+                if (e.authRequired) {
+                    updateAuthStatus();
+                } else {
+                    showAlert(`⚠ 读取条目列表失败，按新增模式渲染: ${e.message}`, 'error');
+                }
+            } finally {
+                showLoading(false);
+            }
+        } else {
+            showAlert('⚠ 未登录，无法列出该配置位的已有条目；登录后重新选择可编辑', 'info');
+        }
+    }
+
+    const latest = currentEntries.length ? currentEntries[currentEntries.length - 1] : null;
+    renderEntryWorkspace(schemaName, latest);
+
+    if (latest) {
+        showAlert(`✓ ${schema.title}：共 ${currentEntries.length} 条数据，已载入最新条目 #${latest.id}（${latest.status}）`, 'success');
+    } else {
+        showAlert(`✓ 已加载 Schema: ${schema.title}${meta && apiClient.isLoggedIn() ? '（该配置位暂无数据，新增模式）' : ''}`, 'info');
+    }
+}
+
+// 渲染工作区：条目栏（仅中台 schema）+ 表单。selectedEntry 为 null 时进入「新增一条」空表单
+function renderEntryWorkspace(schemaName, selectedEntry) {
+    const schema = schemaLoader.getSchema(schemaName);
+    const meta = remoteSchemaMeta[schemaName];
     const container = document.getElementById('formContainer');
     const submitBtn = document.getElementById('submitBtn');
     const resetBtn = document.getElementById('resetBtn');
     const exportBtn = document.getElementById('exportBtn');
     const copyBtn = document.getElementById('copyBtn');
 
-    // 清空空状态
     container.innerHTML = '';
+    currentEntryId = selectedEntry ? selectedEntry.id : null;
 
-    formRenderer = new FormRenderer(schema, container, (data) => {
+    if (meta && meta.dataId && meta.key) {
+        container.appendChild(buildEntryBar(schemaName, selectedEntry));
+    }
+
+    const formHost = document.createElement('div');
+    container.appendChild(formHost);
+
+    formRenderer = new FormRenderer(schema, formHost, (data) => {
         currentFormData = data;
         updatePreview(data);
     });
 
     // 中台加载的 schema 自带 data_id/key：注入图片直传器，选图后走
     // upload-token → S3 直传 → 字段存 S3 key；本地 schema 无处签发凭证，保持 base64
-    const meta = remoteSchemaMeta[schemaName];
     if (meta && meta.dataId && meta.key) {
         formRenderer.setImageUploader((file, fieldPath) => uploadImageToS3(meta, file, fieldPath));
     }
 
+    if (selectedEntry && selectedEntry.payload) {
+        formRenderer.setInitialData(selectedEntry.payload);
+    }
     formRenderer.render();
+    updatePreview(formRenderer.getFormData());
 
-    // 显示按钮
     submitBtn.style.display = 'block';
     resetBtn.style.display = 'inline-block';
     exportBtn.style.display = 'inline-block';
     copyBtn.style.display = 'inline-block';
+    submitBtn.textContent = currentEntryId
+        ? `💾 保存修改（条目 #${currentEntryId}）`
+        : '🆕 保存为新条目';
+}
 
-    showAlert(`✓ 已加载 Schema: ${schema.title}`, 'info');
+// 条目栏：切换同一配置位下的多条数据 + 新增一条
+function buildEntryBar(schemaName, selectedEntry) {
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:16px;'
+        + 'padding:10px 12px;background:#f7f8fa;border:1px solid #e2e5ea;border-radius:6px;';
+
+    const label = document.createElement('span');
+    label.textContent = `条目（${currentEntries.length} 条）`;
+    label.style.cssText = 'font-size:13px;color:#555;white-space:nowrap;';
+    bar.appendChild(label);
+
+    if (currentEntries.length) {
+        const select = document.createElement('select');
+        select.className = 'form-control';
+        select.style.maxWidth = '380px';
+        currentEntries.forEach(e => {
+            const o = document.createElement('option');
+            o.value = String(e.id);
+            const t = (e.updated_at || '').replace('T', ' ').slice(0, 19);
+            o.textContent = `#${e.id} · ${e.status}${t ? ' · ' + t : ''}`;
+            select.appendChild(o);
+        });
+        if (!selectedEntry) {
+            const blank = document.createElement('option');
+            blank.value = '';
+            blank.textContent = '（新条目，未保存）';
+            select.appendChild(blank);
+        }
+        select.value = selectedEntry ? String(selectedEntry.id) : '';
+        select.addEventListener('change', () => {
+            const picked = currentEntries.find(e => String(e.id) === select.value);
+            renderEntryWorkspace(schemaName, picked || null);
+        });
+        bar.appendChild(select);
+    }
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn btn-primary';
+    addBtn.textContent = '➕ 新增一条';
+    addBtn.addEventListener('click', () => renderEntryWorkspace(schemaName, null));
+    bar.appendChild(addBtn);
+
+    return bar;
 }
 
 function updatePreview(data) {

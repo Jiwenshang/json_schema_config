@@ -1,11 +1,12 @@
 // 中台（tripo-marketing-center）OpenAPI 客户端
-// 接口约定见 tripo-marketing-center/internal/router/router.go：
-//   POST /auth/login                                    登录换取 JWT（响应 {code, msg, data:{token}}）
-//   GET  /v2/marketing/config/schema                    获取所有配置 Schema（公开，无需认证）
-//   GET  /v2/marketing/config/entry/:data_id/:key       获取配置条目（需认证）
-//   POST /v2/marketing/config/entry/:data_id/:key       创建配置条目（需认证）
-//   PUT  /v2/marketing/config/entry/:data_id/:key       更新配置条目草稿（需认证）
-//   POST /v2/marketing/config/entry/:data_id/:key/publish 发布配置条目（需认证）
+// 接口约定见 tripo-marketing-center/internal/router/router.go。
+// 同一配置位 (data_id, key) 允许多条数据，单条操作走 items/:id：
+//   POST /auth/login                                          登录换取 JWT（响应 {code, msg, data:{token}}）
+//   GET  /v2/marketing/config/schema                          获取所有配置 Schema（公开，无需认证）
+//   GET  /v2/marketing/config/entry/:data_id/:key             列出该配置位全部条目（需认证）
+//   POST /v2/marketing/config/entry/:data_id/:key             新建一条配置条目（需认证，每次都是新条目）
+//   PUT  /v2/marketing/config/entry/:data_id/:key/items/:id   更新指定条目草稿（需认证）
+//   POST /v2/marketing/config/entry/:data_id/:key/items/:id/publish 发布指定条目（需认证）
 class McApiClient {
     constructor() {
         this.baseURL = localStorage.getItem('mc_api_base') || 'http://localhost:8080';
@@ -100,27 +101,26 @@ class McApiClient {
         return this.request('GET', '/v2/marketing/config/schema');
     }
 
-    async getEntry(dataId, key) {
-        try {
-            return await this.request('GET', this.entryPath(dataId, key));
-        } catch (e) {
-            if (e.status === 404) {
-                return null;
-            }
-            throw e;
-        }
+    itemPath(dataId, key, id, suffix = '') {
+        return this.entryPath(dataId, key, `/items/${id}${suffix}`);
+    }
+
+    // 列出该配置位下全部条目，返回 {total, entries: [...]}；无条目时 entries 为空数组
+    async listEntries(dataId, key) {
+        const resp = await this.request('GET', this.entryPath(dataId, key));
+        return (resp && resp.entries) || [];
     }
 
     createEntry(dataId, key, payload) {
         return this.request('POST', this.entryPath(dataId, key), payload);
     }
 
-    updateEntry(dataId, key, payload) {
-        return this.request('PUT', this.entryPath(dataId, key), payload);
+    updateEntry(dataId, key, entryId, payload) {
+        return this.request('PUT', this.itemPath(dataId, key, entryId), payload);
     }
 
-    publishEntry(dataId, key) {
-        return this.request('POST', this.entryPath(dataId, key, '/publish'));
+    publishEntry(dataId, key, entryId) {
+        return this.request('POST', this.itemPath(dataId, key, entryId, '/publish'));
     }
 
     // 签发图片直传 S3 的 STS 临时凭证（image srv）。
@@ -131,14 +131,4 @@ class McApiClient {
         return this.request('POST', this.entryPath(dataId, key, '/image/upload-token'), { path, format });
     }
 
-    // 存在则更新草稿，不存在则创建
-    async saveEntry(dataId, key, payload) {
-        const existing = await this.getEntry(dataId, key);
-        if (existing) {
-            const entry = await this.updateEntry(dataId, key, payload);
-            return { entry, created: false };
-        }
-        const entry = await this.createEntry(dataId, key, payload);
-        return { entry, created: true };
-    }
 }
